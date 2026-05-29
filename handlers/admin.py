@@ -13,6 +13,7 @@ from config import Config
 from database import STATUS_PENDING, Database
 from keyboards import ModerationCallback, moderation_keyboard
 from services.formatter import format_admin_preview
+from services.i18n import t
 from services.publisher import PublishingError, publish_submission
 
 
@@ -68,7 +69,7 @@ async def moderation_callback(
     admin_id = callback.from_user.id
     if admin_id not in config.admin_user_ids:
         logger.warning("User %s tried to use admin action %s", admin_id, callback_data.action)
-        await _answer_callback(callback, "Ця дія доступна лише адміністраторам.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.admin_only"), show_alert=True)
         return
 
     if callback_data.action == "approve":
@@ -79,7 +80,7 @@ async def moderation_callback(
         await _start_edit(callback, callback_data.submission_id, bot, config, db)
     else:
         logger.warning("Unknown moderation action: %s", callback_data.action)
-        await _answer_callback(callback, "Невідома дія.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.unknown_action"), show_alert=True)
 
 
 @router.message(AdminCommandChatFilter(), Command("cancel"))
@@ -87,13 +88,13 @@ async def cancel_edit(message: Message, bot: Bot, config: Config, db: Database) 
     assert message.from_user is not None
     state = await db.get_admin_edit_state(message.from_user.id)
     if state is None:
-        await message.answer("Немає активного редагування.")
+        await message.answer(t("admin.edit.no_active_edit"))
         return
 
     await db.clear_admin_edit_state(message.from_user.id)
     await _delete_edit_prompts(bot, message.from_user.id)
     logger.info("Admin %s cancelled editing submission %s", message.from_user.id, state["submission_id"])
-    await message.answer("Редагування скасовано.")
+    await message.answer(t("admin.edit.cancelled"))
 
 
 @router.message(AdminEditMessageFilter(), CommandStart())
@@ -103,10 +104,7 @@ async def remind_active_edit(message: Message, db: Database) -> None:
     if state is None:
         return
 
-    await message.answer(
-        f"Редагування заявки #{state['submission_id']} активне. "
-        "Надішли новий текст, фото, відео або документ. Для скасування використай /cancel."
-    )
+    await message.answer(t("admin.edit.active_reminder", submission_id=state["submission_id"]))
 
 
 @router.message(AdminEditMessageFilter(), F.photo)
@@ -183,7 +181,7 @@ async def receive_admin_edit(message: Message, bot: Bot, config: Config, db: Dat
     if edit_applied:
         logger.info("Draft for submission %s was updated from admin message", submission_id)
     else:
-        await message.answer("Редагування скасовано.")
+        await message.answer(t("admin.edit.cancelled_generic"))
 
 
 @router.channel_post(AdminChannelEditPostFilter(), F.photo)
@@ -313,7 +311,7 @@ async def _receive_admin_media_edit(
         )
         logger.info("Media for submission %s was updated from admin message", submission_id)
     else:
-        await message.answer("Редагування скасовано.")
+        await message.answer(t("admin.edit.cancelled_generic"))
 
 
 async def _receive_channel_media_edit(
@@ -381,18 +379,18 @@ async def _approve_submission(
     async with _approve_locks[submission_id]:
         submission = await db.get_submission(submission_id)
         if submission is None:
-            await _answer_callback(callback, "Заявку не знайдено.", show_alert=True)
+            await _answer_callback(callback, t("admin.alert.submission_not_found"), show_alert=True)
             return
 
         if submission["status"] != STATUS_PENDING:
-            await _answer_callback(callback, "Цю заявку вже оброблено.", show_alert=True)
+            await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
             return
 
         try:
             await publish_submission(bot, config, submission)
         except PublishingError as exc:
             logger.exception("Failed to publish submission %s: %s", submission_id, exc)
-            await _answer_callback(callback, "Не вдалося опублікувати.", show_alert=True)
+            await _answer_callback(callback, t("admin.alert.publish_failed"), show_alert=True)
             return
 
         await db.mark_published(submission_id)
@@ -401,7 +399,7 @@ async def _approve_submission(
             await _update_admin_preview(bot, config, updated_submission, keep_buttons=False)
 
         logger.info("Admin %s approved submission %s", callback.from_user.id, submission_id)
-        await _answer_callback(callback, "Опубліковано.")
+        await _answer_callback(callback, t("admin.alert.published"))
 
 
 async def _reject_submission(
@@ -413,11 +411,11 @@ async def _reject_submission(
 ) -> None:
     submission = await db.get_submission(submission_id)
     if submission is None:
-        await _answer_callback(callback, "Заявку не знайдено.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.submission_not_found"), show_alert=True)
         return
 
     if submission["status"] != STATUS_PENDING:
-        await _answer_callback(callback, "Цю заявку вже оброблено.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
         return
 
     await db.mark_rejected(submission_id)
@@ -426,7 +424,7 @@ async def _reject_submission(
         await _update_admin_preview(bot, config, updated_submission, keep_buttons=False)
 
     logger.info("Admin %s rejected submission %s", callback.from_user.id, submission_id)
-    await _answer_callback(callback, "Відхилено.")
+    await _answer_callback(callback, t("admin.alert.rejected"))
 
 
 async def _start_edit(
@@ -438,21 +436,17 @@ async def _start_edit(
 ) -> None:
     submission = await db.get_submission(submission_id)
     if submission is None:
-        await _answer_callback(callback, "Заявку не знайдено.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.submission_not_found"), show_alert=True)
         return
 
     if submission["status"] != STATUS_PENDING:
-        await _answer_callback(callback, "Цю заявку вже оброблено.", show_alert=True)
+        await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
         return
 
     await db.set_admin_edit_state(callback.from_user.id, submission_id)
     logger.info("Admin %s started editing submission %s", callback.from_user.id, submission_id)
 
-    prompt = (
-        f"Редагування заявки #{submission_id} увімкнено. "
-        "Надішли новий текст, фото, відео або документ. "
-        "Щоб скасувати редагування, використай /cancel."
-    )
+    prompt = t("admin.edit.prompt", submission_id=submission_id)
 
     if callback.message is not None:
         if _chat_type(callback.message) == "channel":
@@ -461,10 +455,7 @@ async def _start_edit(
             try:
                 prompt_message = await bot.send_message(
                     chat_id=config.admin_chat_id,
-                    text=(
-                        f"Редагування заявки #{submission_id} увімкнено. "
-                        "Надішли новий текст, фото, відео або документ наступним повідомленням у цьому каналі."
-                    ),
+                    text=t("admin.edit.channel_prompt", submission_id=submission_id),
                 )
                 _remember_edit_prompt(
                     callback.from_user.id,
@@ -618,10 +609,7 @@ async def _mark_media_replacement(
         bot=bot,
         chat_id=new_media_chat_id,
         message_id=new_media_message_id,
-        text=(
-            f"Нове медіа для заявки #{submission_id} додано до чернетки. "
-            "Саме воно буде опубліковане після Approve."
-        ),
+        text=t("admin.media.new_marker", submission_id=submission_id),
     )
 
     if old_media_message_id is None:
@@ -634,10 +622,7 @@ async def _mark_media_replacement(
         bot=bot,
         chat_id=config.admin_chat_id,
         message_id=old_media_message_id,
-        text=(
-            f"Старе медіа для заявки #{submission_id} замінено. "
-            "Воно більше не буде опубліковане."
-        ),
+        text=t("admin.media.old_marker", submission_id=submission_id),
     )
 
 
@@ -693,7 +678,11 @@ def _is_expired_callback_error(exc: TelegramBadRequest) -> bool:
 
 
 def _is_channel_edit_prompt(text: str | None) -> bool:
-    return bool(text and text.startswith("Редагування заявки #") and "увімкнено" in text)
+    return bool(
+        text
+        and text.startswith(t("admin.edit.prompt_detection_prefix"))
+        and t("admin.edit.prompt_detection_marker") in text
+    )
 
 
 def _chat_type(message: Message) -> str:

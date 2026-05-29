@@ -3,42 +3,52 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from services.i18n import t, t_optional
+
 
 MAX_PREVIEW_TEXT_LENGTH = 1200
 
 
 def format_admin_preview(submission: dict[str, Any]) -> str:
     username = submission.get("username")
-    username_text = f"@{escape(username)}" if username else "немає"
+    username_text = f"@{escape(username)}" if username else t("formatter.none")
     original_text = _format_block(submission.get("original_text"))
     draft_text = _format_block(submission.get("draft_text"))
+    status = str(submission["status"])
+    status_text = t_optional(f"status.{status}", status)
 
     return "\n".join(
         [
-            f"<b>Заявка #{submission['id']}</b>",
-            f"<b>Автор:</b> {username_text}",
-            f"<b>User ID:</b> <code>{submission['user_id']}</code>",
-            f"<b>Тип:</b> <code>{escape(str(submission['message_type']))}</code>",
-            f"<b>Файл:</b> {_format_file_id(submission.get('file_id'))}",
-            f"<b>Медіа-повідомлення:</b> {_format_message_id(submission.get('admin_media_message_id'))}",
+            f"<b>{escape(t('formatter.labels.title', submission_id=submission['id']))}</b>",
+            f"<b>{escape(t('formatter.labels.author'))}:</b> {username_text}",
+            f"<b>{escape(t('formatter.labels.user_id'))}:</b> <code>{submission['user_id']}</code>",
+            f"<b>{escape(t('formatter.labels.type'))}:</b> <code>{escape(str(submission['message_type']))}</code>",
+            f"<b>{escape(t('formatter.labels.file'))}:</b> {_format_file_id(submission.get('file_id'))}",
+            (
+                f"<b>{escape(t('formatter.labels.media_message'))}:</b> "
+                f"{_format_message_id(submission.get('admin_media_message_id'))}"
+            ),
             "",
-            "<b>Оригінальний текст / підпис:</b>",
+            f"<b>{escape(t('formatter.labels.original_text'))}:</b>",
             original_text,
             "",
-            "<b>Поточна чернетка:</b>",
+            f"<b>{escape(t('formatter.labels.draft_text'))}:</b>",
             draft_text,
             "",
-            f"<b>Статус:</b> <code>{escape(str(submission['status']))}</code>",
-            f"<b>Створено:</b> <code>{escape(str(submission['created_at']))}</code>",
-            f"<b>Оновлено:</b> <code>{escape(str(submission['updated_at']))}</code>",
-            f"<b>Опубліковано:</b> <code>{escape(str(submission.get('published_at') or '—'))}</code>",
+            f"<b>{escape(t('formatter.labels.status'))}:</b> <code>{escape(status_text)}</code>",
+            f"<b>{escape(t('formatter.labels.created_at'))}:</b> <code>{escape(str(submission['created_at']))}</code>",
+            f"<b>{escape(t('formatter.labels.updated_at'))}:</b> <code>{escape(str(submission['updated_at']))}</code>",
+            (
+                f"<b>{escape(t('formatter.labels.published_at'))}:</b> "
+                f"<code>{escape(str(submission.get('published_at') or t('formatter.dash')))}</code>"
+            ),
         ]
     )
 
 
 def _format_block(value: str | None) -> str:
     if not value:
-        return "<i>порожньо</i>"
+        return f"<i>{escape(t('formatter.empty'))}</i>"
 
     text = _truncate(value, MAX_PREVIEW_TEXT_LENGTH)
     return escape(text)
@@ -46,14 +56,14 @@ def _format_block(value: str | None) -> str:
 
 def _format_file_id(file_id: str | None) -> str:
     if not file_id:
-        return "<i>немає</i>"
+        return f"<i>{escape(t('formatter.none'))}</i>"
 
     return f"<code>{escape(_short_file_id(file_id))}</code>"
 
 
 def _format_message_id(message_id: object | None) -> str:
     if message_id is None:
-        return "<i>немає</i>"
+        return f"<i>{escape(t('formatter.none'))}</i>"
 
     return f"<code>{escape(str(message_id))}</code>"
 

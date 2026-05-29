@@ -24,6 +24,7 @@ async def run() -> None:
 
     logger.info("Starting Marvel Rivals UA submission bot")
     logger.info("Admin chat: %s, publish chat: %s", config.admin_chat_id, config.publish_chat_id)
+    logger.info("Submission cooldown: %s seconds", config.submission_cooldown_seconds)
 
     try:
         await dispatcher.start_polling(

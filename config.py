@@ -17,6 +17,7 @@ class Config:
     publish_chat_id: int
     admin_user_ids: frozenset[int]
     database_path: str = "bot.db"
+    submission_cooldown_seconds: int = 120
 
 
 def load_config() -> Config:
@@ -27,6 +28,7 @@ def load_config() -> Config:
     publish_chat_id = _required_int("PUBLISH_CHAT_ID")
     admin_user_ids = _parse_admin_user_ids(_required("ADMIN_USER_IDS"))
     database_path = os.getenv("DATABASE_PATH", "bot.db").strip() or "bot.db"
+    submission_cooldown_seconds = _optional_non_negative_int("SUBMISSION_COOLDOWN_SECONDS", 120)
 
     return Config(
         bot_token=bot_token,
@@ -34,6 +36,7 @@ def load_config() -> Config:
         publish_chat_id=publish_chat_id,
         admin_user_ids=admin_user_ids,
         database_path=database_path,
+        submission_cooldown_seconds=submission_cooldown_seconds,
     )
 
 
@@ -52,6 +55,22 @@ def _required_int(name: str) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
 
 
+def _optional_non_negative_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be an integer") from exc
+
+    if parsed < 0:
+        raise ConfigError(f"{name} must be 0 or greater")
+
+    return parsed
+
+
 def _parse_admin_user_ids(value: str) -> frozenset[int]:
     raw_ids = [part.strip() for part in value.split(",") if part.strip()]
     if not raw_ids:
@@ -65,4 +84,3 @@ def _parse_admin_user_ids(value: str) -> frozenset[int]:
             raise ConfigError("ADMIN_USER_IDS must be comma-separated integers") from exc
 
     return frozenset(admin_ids)
-

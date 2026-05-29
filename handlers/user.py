@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -12,18 +13,11 @@ from config import Config
 from database import Database
 from keyboards import moderation_keyboard
 from services.formatter import format_admin_preview
+from services.i18n import t
 
 
 logger = logging.getLogger(__name__)
 router = Router(name="user")
-
-START_TEXT = (
-    "Привіт! Надішли новину, посилання, фото, відео або документ для Marvel Rivals UA. "
-    "Після модерації вона може бути опублікована в спільноті."
-)
-THANK_YOU_TEXT = "Дякуємо! Твою новину відправлено на модерацію."
-UNSUPPORTED_TEXT = "Наразі я можу приймати текст, посилання, фото, відео або документи."
-SUBMISSION_ERROR_TEXT = "Вибач, не вдалося відправити новину на модерацію. Спробуй пізніше."
 
 URL_PATTERN = re.compile(r"https?://|www\.", re.IGNORECASE)
 
@@ -35,13 +29,13 @@ class SubmissionChatFilter(BaseFilter):
 
 @router.message(SubmissionChatFilter(), CommandStart())
 async def start(message: Message) -> None:
-    await message.answer(START_TEXT)
+    await message.answer(t("user.start"))
 
 
 @router.message(SubmissionChatFilter(), F.text)
 async def submit_text(message: Message, bot: Bot, config: Config, db: Database) -> None:
     if not message.text:
-        await message.answer(UNSUPPORTED_TEXT)
+        await message.answer(t("user.unsupported"))
         return
 
     message_type = "link" if _contains_link(message) else "text"
@@ -60,7 +54,7 @@ async def submit_text(message: Message, bot: Bot, config: Config, db: Database) 
 async def submit_photo(message: Message, bot: Bot, config: Config, db: Database) -> None:
     photo = message.photo[-1] if message.photo else None
     if photo is None:
-        await message.answer(UNSUPPORTED_TEXT)
+        await message.answer(t("user.unsupported"))
         return
 
     await _create_and_send_submission(
@@ -77,7 +71,7 @@ async def submit_photo(message: Message, bot: Bot, config: Config, db: Database)
 @router.message(SubmissionChatFilter(), F.video)
 async def submit_video(message: Message, bot: Bot, config: Config, db: Database) -> None:
     if message.video is None:
-        await message.answer(UNSUPPORTED_TEXT)
+        await message.answer(t("user.unsupported"))
         return
 
     await _create_and_send_submission(
@@ -94,7 +88,7 @@ async def submit_video(message: Message, bot: Bot, config: Config, db: Database)
 @router.message(SubmissionChatFilter(), F.document)
 async def submit_document(message: Message, bot: Bot, config: Config, db: Database) -> None:
     if message.document is None:
-        await message.answer(UNSUPPORTED_TEXT)
+        await message.answer(t("user.unsupported"))
         return
 
     await _create_and_send_submission(
@@ -110,7 +104,7 @@ async def submit_document(message: Message, bot: Bot, config: Config, db: Databa
 
 @router.message(SubmissionChatFilter())
 async def unsupported(message: Message) -> None:
-    await message.answer(UNSUPPORTED_TEXT)
+    await message.answer(t("user.unsupported"))
 
 
 async def _create_and_send_submission(
@@ -124,7 +118,17 @@ async def _create_and_send_submission(
     file_id: str | None,
 ) -> None:
     if message.from_user is None:
-        await message.answer(UNSUPPORTED_TEXT)
+        await message.answer(t("user.unsupported"))
+        return
+
+    cooldown_remaining = await _submission_cooldown_remaining(db, message.from_user.id, config)
+    if cooldown_remaining > 0:
+        await message.answer(t("user.cooldown", seconds=cooldown_remaining))
+        logger.info(
+            "Rejected submission from user %s due to cooldown: %s seconds remaining",
+            message.from_user.id,
+            cooldown_remaining,
+        )
         return
 
     submission_id = await db.create_submission(
@@ -137,7 +141,7 @@ async def _create_and_send_submission(
     submission = await db.get_submission(submission_id)
     if submission is None:
         logger.error("Submission %s was created but could not be loaded", submission_id)
-        await message.answer(SUBMISSION_ERROR_TEXT)
+        await message.answer(t("user.submission_error"))
         return
 
     logger.info(
@@ -161,12 +165,12 @@ async def _create_and_send_submission(
         )
     except TelegramAPIError:
         logger.exception("Failed to send submission %s to admin chat", submission_id)
-        await message.answer(SUBMISSION_ERROR_TEXT)
+        await message.answer(t("user.submission_error"))
         return
 
     await db.set_admin_message_id(submission_id, admin_message.message_id)
     logger.info("Sent submission %s to admin chat as message %s", submission_id, admin_message.message_id)
-    await message.answer(THANK_YOU_TEXT)
+    await message.answer(t("user.thank_you"))
 
 
 async def _copy_media_context_to_admin(
@@ -192,7 +196,7 @@ async def _copy_media_context_to_admin(
     try:
         await bot.send_message(
             chat_id=config.admin_chat_id,
-            text=f"Початкове медіа для заявки #{submission_id}.",
+            text=t("admin.media.initial_marker", submission_id=submission_id),
             reply_to_message_id=copied_message.message_id,
             allow_sending_without_reply=True,
         )
@@ -213,3 +217,26 @@ def _contains_link(message: Message) -> bool:
             return True
 
     return False
+
+
+async def _submission_cooldown_remaining(db: Database, user_id: int, config: Config) -> int:
+    cooldown_seconds = config.submission_cooldown_seconds
+    if cooldown_seconds <= 0:
+        return 0
+
+    latest_submission = await db.get_latest_user_submission(user_id)
+    if latest_submission is None:
+        return 0
+
+    created_at = _parse_utc_datetime(str(latest_submission["created_at"]))
+    elapsed_seconds = int((datetime.now(timezone.utc) - created_at).total_seconds())
+    remaining_seconds = cooldown_seconds - elapsed_seconds
+    return max(0, remaining_seconds)
+
+
+def _parse_utc_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)

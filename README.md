@@ -16,6 +16,7 @@ MVP Telegram bot for a Ukrainian Marvel Rivals community. Users send text, links
 - Publishes approved text or original media to the configured public chat.
 - Handles long media captions by publishing the media first, then the draft text as a separate message.
 - Supports per-admin edit state and `/cancel` for edit cancellation.
+- Limits user submissions with configurable per-user cooldown.
 
 ## What It Does Not Do Yet
 
@@ -42,8 +43,11 @@ handlers/
   user.py
   admin.py
 services/
+  i18n.py
   formatter.py
   publisher.py
+locales/
+  uk.json
 README.md
 requirements.txt
 .env.example
@@ -169,6 +173,7 @@ BOT_TOKEN=1234567890:your_real_token_here
 ADMIN_CHAT_ID=-1001234567890
 PUBLISH_CHAT_ID=-1009876543210
 ADMIN_USER_IDS=111111111,222222222
+SUBMISSION_COOLDOWN_SECONDS=120
 ```
 
 Optional:
@@ -178,6 +183,8 @@ DATABASE_PATH=bot.db
 ```
 
 If `DATABASE_PATH` is omitted, the bot creates `bot.db` in the project directory.
+
+`SUBMISSION_COOLDOWN_SECONDS` controls how often one Telegram user may submit content. The default is `120`. Set it to `0` to disable the limit.
 
 ## Run Locally
 
@@ -209,6 +216,7 @@ On startup the bot validates required environment variables, initializes SQLite 
 11. Send another submission and click `❌ Reject`.
 12. Confirm it is not published and the admin preview status changes to `rejected`.
 13. Try clicking a button from a Telegram user ID not listed in `ADMIN_USER_IDS`. The bot should show an alert and do nothing.
+14. Send two submissions from the same user within `SUBMISSION_COOLDOWN_SECONDS`. The second one should be rejected with a wait message.
 
 ## Editing Text And Media
 
@@ -245,6 +253,7 @@ No Gemini API integration is implemented in this MVP.
 - No role management inside Telegram. Admin access comes only from `ADMIN_USER_IDS`.
 - No automated source ingestion.
 - No duplicate detection.
+- User submissions are rate-limited per Telegram user ID using the latest saved submission timestamp.
 - Admin media stays in the moderation chat and is marked by the bot when it is original, newly added, or replaced. The editable moderation control panel remains a separate text message.
 - If the moderation chat is a Telegram channel, Telegram does not expose the author of the next channel post to the bot. The bot enforces `ADMIN_USER_IDS` on the `✏️ Edit` click, then accepts the next supported post in that channel as the edit. Use a private group or supergroup if you need every edit message to carry the real admin user ID.
 - There is no special command for clearing a media caption to empty. Sending media without a caption keeps the current draft text.

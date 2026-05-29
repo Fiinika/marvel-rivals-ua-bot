@@ -142,6 +142,21 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def get_latest_user_submission(self, user_id: int) -> Submission | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM submissions
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
     async def update_draft_text(self, submission_id: int, draft_text: str) -> None:
         await self._execute(
             """
