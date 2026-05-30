@@ -18,6 +18,11 @@ class Config:
     admin_user_ids: frozenset[int]
     database_path: str = "bot.db"
     submission_cooldown_seconds: int = 120
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    official_news_url: str = "https://www.marvelrivals.com/news/"
+    news_check_interval_minutes: int | None = 30
+    article_timezone: str = "Europe/Kyiv"
 
 
 def load_config() -> Config:
@@ -29,6 +34,12 @@ def load_config() -> Config:
     admin_user_ids = _parse_admin_user_ids(_required("ADMIN_USER_IDS"))
     database_path = os.getenv("DATABASE_PATH", "bot.db").strip() or "bot.db"
     submission_cooldown_seconds = _optional_non_negative_int("SUBMISSION_COOLDOWN_SECONDS", 120)
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip() or None
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    official_news_url = os.getenv("OFFICIAL_NEWS_URL", "https://www.marvelrivals.com/news/").strip()
+    official_news_url = official_news_url or "https://www.marvelrivals.com/news/"
+    news_check_interval_minutes = _optional_positive_int_or_none("NEWS_CHECK_INTERVAL_MINUTES", 30)
+    article_timezone = os.getenv("ARTICLE_TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
 
     return Config(
         bot_token=bot_token,
@@ -37,6 +48,11 @@ def load_config() -> Config:
         admin_user_ids=admin_user_ids,
         database_path=database_path,
         submission_cooldown_seconds=submission_cooldown_seconds,
+        gemini_api_key=gemini_api_key,
+        gemini_model=gemini_model,
+        official_news_url=official_news_url,
+        news_check_interval_minutes=news_check_interval_minutes,
+        article_timezone=article_timezone,
     )
 
 
@@ -67,6 +83,25 @@ def _optional_non_negative_int(name: str, default: int) -> int:
 
     if parsed < 0:
         raise ConfigError(f"{name} must be 0 or greater")
+
+    return parsed
+
+
+def _optional_positive_int_or_none(name: str, default: int | None) -> int | None:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    if not value.strip():
+        return None
+
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+
+    if parsed <= 0:
+        return None
 
     return parsed
 

@@ -11,7 +11,14 @@ from aiogram.types import CallbackQuery, Message
 
 from config import Config
 from database import STATUS_PENDING, Database
-from keyboards import ModerationCallback, moderation_keyboard
+from keyboards import CollectorCallback, ModerationCallback, collector_source_keyboard, moderation_keyboard
+from services.collectors.registry import (
+    CollectionMode,
+    create_collector,
+    format_collection_report,
+    get_collector_definition,
+    list_collector_definitions,
+)
 from services.formatter import format_admin_preview
 from services.i18n import t
 from services.publisher import PublishingError, publish_submission
@@ -81,6 +88,73 @@ async def moderation_callback(
     else:
         logger.warning("Unknown moderation action: %s", callback_data.action)
         await _answer_callback(callback, t("admin.alert.unknown_action"), show_alert=True)
+
+
+@router.message(Command("fetch_news"))
+async def fetch_news(message: Message, bot: Bot, config: Config, db: Database) -> None:
+    if message.from_user is None or message.from_user.id not in config.admin_user_ids:
+        await message.answer(t("admin.news_fetch.no_permission"))
+        return
+
+    if message.chat.id != config.admin_chat_id and _chat_type(message) != "private":
+        await message.answer(t("admin.news_fetch.wrong_chat"))
+        return
+
+    await message.answer(
+        t("admin.news_fetch.choose_source"),
+        reply_markup=collector_source_keyboard(list_collector_definitions()),
+    )
+
+
+@router.callback_query(CollectorCallback.filter())
+async def collector_callback(
+    callback: CallbackQuery,
+    callback_data: CollectorCallback,
+    bot: Bot,
+    config: Config,
+    db: Database,
+) -> None:
+    admin_id = callback.from_user.id
+    if admin_id not in config.admin_user_ids:
+        logger.warning("User %s tried to run collector %s", admin_id, callback_data.collector_id)
+        await _answer_callback(callback, t("admin.alert.admin_only"), show_alert=True)
+        return
+
+    definition = get_collector_definition(callback_data.collector_id)
+    collector = create_collector(callback_data.collector_id, config=config, db=db, bot=bot)
+    if definition is None or collector is None:
+        await _answer_callback(callback, t("admin.news_fetch.unknown_source"), show_alert=True)
+        return
+
+    target_chat_id = callback.message.chat.id if callback.message is not None else config.admin_chat_id
+    target_message_id = callback.message.message_id if callback.message is not None else None
+    started_text = t("admin.news_fetch.started", source=definition.title)
+
+    if target_message_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=target_chat_id,
+                message_id=target_message_id,
+                text=started_text,
+                reply_markup=None,
+            )
+        except TelegramAPIError:
+            logger.info("Could not edit collector selector message; sending parsing status separately")
+            status_message = await bot.send_message(chat_id=target_chat_id, text=started_text)
+            target_message_id = status_message.message_id
+    else:
+        status_message = await bot.send_message(chat_id=target_chat_id, text=started_text)
+        target_message_id = status_message.message_id
+
+    await _answer_callback(callback)
+    stats = await collector.run_once(mode=CollectionMode.MANUAL_LATEST)
+    report = format_collection_report(stats)
+
+    try:
+        await bot.edit_message_text(chat_id=target_chat_id, message_id=target_message_id, text=report)
+    except TelegramAPIError:
+        logger.info("Could not edit collector status message; sending a new report")
+        await bot.send_message(chat_id=target_chat_id, text=report)
 
 
 @router.message(AdminCommandChatFilter(), Command("cancel"))

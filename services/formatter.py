@@ -24,6 +24,12 @@ def format_admin_preview(submission: dict[str, Any]) -> str:
             f"<b>{escape(t('formatter.labels.user_id'))}:</b> <code>{submission['user_id']}</code>",
             f"<b>{escape(t('formatter.labels.type'))}:</b> <code>{escape(str(submission['message_type']))}</code>",
             f"<b>{escape(t('formatter.labels.file'))}:</b> {_format_file_id(submission.get('file_id'))}",
+            f"<b>{escape(t('formatter.labels.media_url'))}:</b> {_format_inline_value(submission.get('media_url'))}",
+            f"<b>{escape(t('formatter.labels.source_url'))}:</b> {_format_inline_value(submission.get('source_url'))}",
+            (
+                f"<b>{escape(t('formatter.labels.article_date'))}:</b> "
+                f"{_format_inline_value(submission.get('article_date_display'))}"
+            ),
             (
                 f"<b>{escape(t('formatter.labels.media_message'))}:</b> "
                 f"{_format_message_id(submission.get('admin_media_message_id'))}"
@@ -59,6 +65,13 @@ def _format_file_id(file_id: str | None) -> str:
         return f"<i>{escape(t('formatter.none'))}</i>"
 
     return f"<code>{escape(_short_file_id(file_id))}</code>"
+
+
+def _format_inline_value(value: object | None) -> str:
+    if value is None or value == "":
+        return f"<i>{escape(t('formatter.none'))}</i>"
+
+    return f"<code>{escape(_truncate(str(value), 160))}</code>"
 
 
 def _format_message_id(message_id: object | None) -> str:

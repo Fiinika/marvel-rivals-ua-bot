@@ -45,6 +45,33 @@ class Database:
                 """
             )
             await self._ensure_column(db, "submissions", "admin_media_message_id", "INTEGER")
+            await self._ensure_column(db, "submissions", "media_url", "TEXT")
+            await self._ensure_column(db, "submissions", "media_type", "TEXT")
+            await self._ensure_column(db, "submissions", "source_url", "TEXT")
+            await self._ensure_column(db, "submissions", "source_type", "TEXT")
+            await self._ensure_column(db, "submissions", "source_id", "TEXT")
+            await self._ensure_column(db, "submissions", "article_date", "TEXT")
+            await self._ensure_column(db, "submissions", "article_date_display", "TEXT")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seen_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    title TEXT,
+                    article_date TEXT,
+                    first_seen_at TEXT NOT NULL
+                )
+                """
+            )
+            await self._ensure_column(db, "seen_sources", "article_date", "TEXT")
+            await db.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_seen_sources_source
+                ON seen_sources (source_type, source_id)
+                """
+            )
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS admin_edit_states (
@@ -113,6 +140,68 @@ class Database:
             await db.commit()
             return int(cursor.lastrowid)
 
+    async def create_ai_news_submission(
+        self,
+        *,
+        username: str,
+        original_text: str,
+        draft_text: str,
+        message_type: str,
+        media_url: str | None,
+        media_type: str,
+        source_type: str,
+        source_id: str,
+        source_url: str,
+        article_date: str | None,
+        article_date_display: str | None,
+    ) -> int:
+        now = utc_now()
+
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO submissions (
+                    user_id,
+                    username,
+                    message_type,
+                    original_text,
+                    draft_text,
+                    file_id,
+                    media_url,
+                    media_type,
+                    source_url,
+                    source_type,
+                    source_id,
+                    article_date,
+                    article_date_display,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    0,
+                    username,
+                    message_type,
+                    original_text,
+                    draft_text,
+                    None,
+                    media_url,
+                    media_type,
+                    source_url,
+                    source_type,
+                    source_id,
+                    article_date,
+                    article_date_display,
+                    STATUS_PENDING,
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+            return int(cursor.lastrowid)
+
     async def set_admin_message_id(self, submission_id: int, admin_message_id: int) -> None:
         await self._execute(
             """
@@ -157,6 +246,59 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def is_source_seen(self, source_type: str, source_id: str) -> bool:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT 1
+                FROM seen_sources
+                WHERE source_type = ? AND source_id = ?
+                LIMIT 1
+                """,
+                (source_type, source_id),
+            )
+            row = await cursor.fetchone()
+            return row is not None
+
+    async def mark_source_seen(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        source_url: str,
+        title: str | None,
+        article_date: str | None,
+    ) -> None:
+        await self._execute(
+            """
+            INSERT OR IGNORE INTO seen_sources (
+                source_type,
+                source_id,
+                source_url,
+                title,
+                article_date,
+                first_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (source_type, source_id, source_url, title, article_date, utc_now()),
+        )
+
+    async def get_latest_seen_article_date(self, source_type: str) -> str | None:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT article_date
+                FROM seen_sources
+                WHERE source_type = ? AND article_date IS NOT NULL AND article_date != ''
+                ORDER BY article_date DESC
+                LIMIT 1
+                """,
+                (source_type,),
+            )
+            row = await cursor.fetchone()
+            return str(row["article_date"]) if row else None
+
     async def update_draft_text(self, submission_id: int, draft_text: str) -> None:
         await self._execute(
             """
@@ -179,10 +321,16 @@ class Database:
         await self._execute(
             """
             UPDATE submissions
-            SET message_type = ?, draft_text = ?, file_id = ?, admin_media_message_id = ?, updated_at = ?
+            SET message_type = ?,
+                draft_text = ?,
+                file_id = ?,
+                admin_media_message_id = ?,
+                media_url = NULL,
+                media_type = ?,
+                updated_at = ?
             WHERE id = ?
             """,
-            (message_type, draft_text, file_id, admin_media_message_id, utc_now(), submission_id),
+            (message_type, draft_text, file_id, admin_media_message_id, message_type, utc_now(), submission_id),
         )
 
     async def mark_published(self, submission_id: int) -> None:

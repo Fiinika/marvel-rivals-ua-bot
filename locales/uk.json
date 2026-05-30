@@ -23,12 +23,38 @@
       "initial_marker": "Початкове медіа для заявки #{submission_id}.",
       "new_marker": "Нове медіа для заявки #{submission_id} додано до чернетки. Саме воно буде опубліковане після Approve.",
       "old_marker": "Старе медіа для заявки #{submission_id} замінено. Воно більше не буде опубліковане."
+    },
+    "news_fetch": {
+      "no_permission": "У тебе немає прав для цієї команди.",
+      "wrong_chat": "Команду /fetch_news можна запускати в адмін-чаті або приватно.",
+      "choose_source": "Обери джерело, звідки запустити парсинг:",
+      "started": "🔎 Почався парсинг контенту з джерела: {source}",
+      "unknown_source": "Невідоме джерело для парсингу."
+    },
+    "media_preview": {
+      "photo_caption": "Медіа для заявки #{submission_id}",
+      "draft_text_prefix": "Чернетка для заявки #{submission_id}:"
     }
+  },
+  "collector_report": {
+    "completed": "Перевірку джерела «{source}» завершено.",
+    "all_completed": "Перевірку всіх джерел завершено.",
+    "found": "Знайдено статей: {count}",
+    "duplicates": "Дублікати: {count}",
+    "new": "Нові: {count}",
+    "drafts_created": "Чернеток створено: {count}",
+    "sent_to_moderation": "Надіслано на модерацію: {count}",
+    "failed": "Помилок: {count}",
+    "errors_header": "Помилки:",
+    "collector_run_failed": "Колектор завершився з помилкою: {error}",
+    "gemini_failed": "Gemini не зміг створити чернетку для {url}: {error}",
+    "moderation_send_failed": "Не вдалося надіслати статтю на модерацію {url}: {error}"
   },
   "buttons": {
     "approve": "✅ Approve",
     "edit": "✏️ Edit",
-    "reject": "❌ Reject"
+    "reject": "❌ Reject",
+    "collector_official_marvel_rivals": "Офіційний сайт"
   },
   "formatter": {
     "none": "немає",
@@ -40,6 +66,9 @@
       "user_id": "User ID",
       "type": "Тип",
       "file": "Файл",
+      "media_url": "URL медіа",
+      "source_url": "URL джерела",
+      "article_date": "Дата статті",
       "media_message": "Медіа-повідомлення",
       "original_text": "Оригінальний текст / підпис",
       "draft_text": "Поточна чернетка",
@@ -53,6 +82,76 @@
     "pending": "pending",
     "published": "published",
     "rejected": "rejected"
+  },
+  "date": {
+    "months": {
+      "1": "січня",
+      "2": "лютого",
+      "3": "березня",
+      "4": "квітня",
+      "5": "травня",
+      "6": "червня",
+      "7": "липня",
+      "8": "серпня",
+      "9": "вересня",
+      "10": "жовтня",
+      "11": "листопада",
+      "12": "грудня"
+    },
+    "published_date": "Дата публікації: {date}",
+    "published_datetime": "Дата публікації: {date}, {time} {timezone_label}",
+    "timezone_kyiv": "за Києвом",
+    "timezone_generic": "за часовим поясом {timezone}"
+  },
+  "gemini": {
+    "fallback_date": "Надійної дати публікації немає.",
+    "fallback_body": "Текст статті відсутній або не вдалося надійно витягти.",
+    "date_marker": "Дата публікації:",
+    "source_marker": "Джерело",
+    "source_line": "🔗 Джерело: {source_name} {url}",
+    "hashtags": "#MarvelRivalsUA #новини",
+    "part_title": "Частина {number}"
+  },
+  "collectors": {
+    "common": {
+      "original_text": {
+        "article_title": "Заголовок статті: {value}",
+        "article_url": "URL статті: {value}",
+        "original_article_date": "Оригінальна дата статті: {value}",
+        "converted_article_date": "Дата статті після конвертації: {value}",
+        "parsed_article_text": "Розпізнаний текст статті:",
+        "parsed_excerpt": "Розпізнаний уривок:",
+        "media_url": "URL медіа: {value}",
+        "media_type": "Тип медіа: {value}"
+      }
+    },
+    "official_marvel_rivals": {
+      "title": "Офіційний сайт Marvel Rivals",
+      "source_name": "офіційний сайт Marvel Rivals",
+      "username": "official_news_collector",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор офіційних новин пропускає AI-генерацію чернеток."
+      }
+    }
+  },
+  "post_footer": {
+    "separator": "━━━━━━━━━━━━━━━━━━━━",
+    "title": "Навігація по комʼюніті 👇",
+    "link_separator": " | ",
+    "links": {
+      "chat": {
+        "label": "💬 Чат",
+        "url": "https://t.me/UAMarvelRivalsChat"
+      },
+      "submission": {
+        "label": "🤖 Запропонувати новину",
+        "url": "https://t.me/MarvelRivalsUABot"
+      },
+      "discord": {
+        "label": "🎧 Discord",
+        "url": "https://discord.gg/953cRRVD"
+      }
+    }
   },
   "user": {
     "start": "Привіт! Надішли новину, посилання, фото, відео або документ для Marvel Rivals UA. Після модерації вона може бути опублікована в спільноті.",

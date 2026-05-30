@@ -3,12 +3,17 @@ from __future__ import annotations
 from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from services.collectors.base import CollectorDefinition
 from services.i18n import t
 
 
 class ModerationCallback(CallbackData, prefix="submission"):
     action: str
     submission_id: int
+
+
+class CollectorCallback(CallbackData, prefix="collector"):
+    collector_id: str
 
 
 def moderation_keyboard(submission_id: int):
@@ -26,4 +31,15 @@ def moderation_keyboard(submission_id: int):
         callback_data=ModerationCallback(action="reject", submission_id=submission_id),
     )
     builder.adjust(3)
+    return builder.as_markup()
+
+
+def collector_source_keyboard(collectors: list[CollectorDefinition]):
+    builder = InlineKeyboardBuilder()
+    for collector in collectors:
+        builder.button(
+            text=collector.button_text,
+            callback_data=CollectorCallback(collector_id=collector.collector_id),
+        )
+    builder.adjust(1)
     return builder.as_markup()

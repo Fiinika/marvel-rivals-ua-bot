@@ -220,6 +220,9 @@ def _contains_link(message: Message) -> bool:
 
 
 async def _submission_cooldown_remaining(db: Database, user_id: int, config: Config) -> int:
+    if user_id in config.admin_user_ids:
+        return 0
+
     cooldown_seconds = config.submission_cooldown_seconds
     if cooldown_seconds <= 0:
         return 0
