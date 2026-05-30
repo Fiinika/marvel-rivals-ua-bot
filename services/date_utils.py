@@ -61,7 +61,7 @@ def format_ukrainian_article_date(value: datetime, has_time: bool, target_timezo
     if not has_time:
         return t("date.published_date", date=date_part)
 
-    zone_label = _timezone_label(target_timezone)
+    zone_label = _timezone_label(target_timezone, value)
     return t("date.published_datetime", date=date_part, time=f"{value:%H:%M}", timezone_label=zone_label)
 
 
@@ -85,8 +85,24 @@ def _load_timezone(target_timezone: str) -> tzinfo:
             return timezone.utc
 
 
-def _timezone_label(target_timezone: str) -> str:
+def _timezone_label(target_timezone: str, value: datetime) -> str:
+    offset = _utc_offset_label(value)
     if target_timezone == "Europe/Kyiv":
-        return t("date.timezone_kyiv")
+        return t("date.timezone_kyiv", offset=offset)
 
-    return t("date.timezone_generic", timezone=target_timezone)
+    return t("date.timezone_generic", timezone=target_timezone, offset=offset)
+
+
+def _utc_offset_label(value: datetime) -> str:
+    offset = value.utcoffset()
+    if offset is None:
+        return "UTC"
+
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    if minutes == 0:
+        return f"UTC{sign}{hours}"
+
+    return f"UTC{sign}{hours}:{minutes:02d}"

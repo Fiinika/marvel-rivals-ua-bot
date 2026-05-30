@@ -5,15 +5,13 @@ import re
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import BaseFilter, CommandStart
 from aiogram.types import Message
 
 from config import Config
 from database import Database
-from keyboards import moderation_keyboard
-from services.formatter import format_admin_preview
 from services.i18n import t
+from services.moderation import ModerationSendError, send_submission_to_moderation
 
 
 logger = logging.getLogger(__name__)
@@ -151,59 +149,14 @@ async def _create_and_send_submission(
         message_type,
     )
 
-    admin_media_message_id = await _copy_media_context_to_admin(message, bot, config, submission_id, message_type)
-    if admin_media_message_id is not None:
-        await db.set_admin_media_message_id(submission_id, admin_media_message_id)
-        submission = await db.get_submission(submission_id) or submission
-
     try:
-        admin_message = await bot.send_message(
-            chat_id=config.admin_chat_id,
-            text=format_admin_preview(submission),
-            reply_markup=moderation_keyboard(submission_id),
-            parse_mode="HTML",
-        )
-    except TelegramAPIError:
+        await send_submission_to_moderation(bot, config, db, submission_id)
+    except ModerationSendError:
         logger.exception("Failed to send submission %s to admin chat", submission_id)
         await message.answer(t("user.submission_error"))
         return
 
-    await db.set_admin_message_id(submission_id, admin_message.message_id)
-    logger.info("Sent submission %s to admin chat as message %s", submission_id, admin_message.message_id)
     await message.answer(t("user.thank_you"))
-
-
-async def _copy_media_context_to_admin(
-    message: Message,
-    bot: Bot,
-    config: Config,
-    submission_id: int,
-    message_type: str,
-) -> int | None:
-    if message_type not in {"photo", "video", "document"}:
-        return None
-
-    try:
-        copied_message = await bot.copy_message(
-            chat_id=config.admin_chat_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-        )
-    except TelegramAPIError:
-        logger.exception("Failed to copy media context for submission %s", submission_id)
-        return None
-
-    try:
-        await bot.send_message(
-            chat_id=config.admin_chat_id,
-            text=t("admin.media.initial_marker", submission_id=submission_id),
-            reply_to_message_id=copied_message.message_id,
-            allow_sending_without_reply=True,
-        )
-    except TelegramAPIError:
-        logger.info("Failed to send initial media marker for submission %s", submission_id)
-
-    return copied_message.message_id
 
 
 def _contains_link(message: Message) -> bool:

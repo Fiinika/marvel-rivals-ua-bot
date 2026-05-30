@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 from services.i18n import t
-from services.post_footer import append_community_footer
 
 
 logger = logging.getLogger(__name__)
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_news_uk.md"
 POST_SEPARATOR = "---POST---"
+TAGS_SEPARATOR = "---TAGS---"
 
 
 class GeminiDraftError(RuntimeError):
@@ -29,12 +30,27 @@ class GeminiDraftInput:
     source_name: str
 
 
+@dataclass(frozen=True)
+class GeminiDraftPackage:
+    draft_parts: list[str]
+    tags: list[str]
+
+
 class GeminiDraftGenerator:
     def __init__(self, api_key: str, model: str) -> None:
         self.api_key = api_key
         self.model = model
 
     async def generate_drafts(self, draft_input: GeminiDraftInput, *, max_part_length: int) -> list[str]:
+        package = await self.generate_draft_package(draft_input, max_part_length=max_part_length)
+        return package.draft_parts
+
+    async def generate_draft_package(
+        self,
+        draft_input: GeminiDraftInput,
+        *,
+        max_part_length: int,
+    ) -> GeminiDraftPackage:
         prompt = _build_prompt(draft_input)
         try:
             draft = await asyncio.to_thread(self._generate_sync, prompt)
@@ -45,10 +61,16 @@ class GeminiDraftGenerator:
         if not draft:
             raise GeminiDraftError("Gemini returned an empty draft")
 
-        return [
-            append_community_footer(_ensure_required_metadata(part, draft_input))
-            for part in _split_draft_parts(draft, max_part_length=max_part_length)
+        draft_text, tags = _extract_tags(draft)
+        if not draft_text:
+            raise GeminiDraftError("Gemini returned tags without draft text")
+
+        tags = tags or _fallback_tags(draft_input)
+        draft_parts = [
+            _ensure_required_metadata(part, draft_input)
+            for part in _split_draft_parts(draft_text, max_part_length=max_part_length)
         ]
+        return GeminiDraftPackage(draft_parts=draft_parts, tags=tags)
 
     async def generate_draft(self, draft_input: GeminiDraftInput) -> str:
         drafts = await self.generate_drafts(draft_input, max_part_length=3500)
@@ -110,6 +132,58 @@ def _remove_admin_only_lines(draft: str, draft_input: GeminiDraftInput) -> str:
         lines.append(line)
 
     return "\n".join(lines)
+
+
+def _extract_tags(draft: str) -> tuple[str, list[str]]:
+    if TAGS_SEPARATOR not in draft:
+        return draft, []
+
+    draft_text, _separator, raw_tags = draft.partition(TAGS_SEPARATOR)
+    return draft_text.strip(), _normalize_tags(raw_tags)
+
+
+def _normalize_tags(raw_tags: str) -> list[str]:
+    normalized_tags: list[str] = []
+    seen: set[str] = set()
+    for value in re.split(r"[,;\n]", raw_tags):
+        normalized = value.strip().lower().lstrip("#")
+        normalized = re.sub(r"[_\-]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = normalized.strip(".,;:!?'\"()[]{}")
+        if not normalized or normalized in seen or len(normalized) > 40:
+            continue
+
+        seen.add(normalized)
+        normalized_tags.append(normalized)
+
+        if len(normalized_tags) >= 12:
+            break
+
+    return normalized_tags
+
+
+def _fallback_tags(draft_input: GeminiDraftInput) -> list[str]:
+    fallback_tag = t("gemini.fallback_tag")
+    tags = [fallback_tag]
+    lowered = f"{draft_input.title}\n{draft_input.body_text}".lower()
+    keyword_tags = {
+        "patch": "патч",
+        "balance": "баланс",
+        "skin": "скін",
+        "costume": "костюм",
+        "event": "івент",
+        "season": "сезон",
+        "map": "карта",
+        "mode": "режим",
+        "hero": "герой",
+        "bug": "виправлення",
+        "fix": "виправлення",
+    }
+    for keyword, tag in keyword_tags.items():
+        if keyword in lowered and tag not in tags:
+            tags.append(tag)
+
+    return tags
 
 
 def _split_draft_parts(draft: str, *, max_part_length: int) -> list[str]:

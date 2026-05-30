@@ -7,17 +7,28 @@
       "submission_already_processed": "Цю заявку вже оброблено.",
       "publish_failed": "Не вдалося опублікувати.",
       "published": "Опубліковано.",
-      "rejected": "Відхилено."
+      "rejected": "Відхилено.",
+      "empty_part": "Частина не може бути порожньою.",
+      "text_too_long": "Текст занадто довгий для цього повідомлення.",
+      "save_failed": "Не вдалося зберегти зміни."
     },
     "edit": {
       "no_active_edit": "Немає активного редагування.",
       "cancelled": "Редагування скасовано.",
       "cancelled_generic": "Редагування скасовано.",
-      "active_reminder": "Редагування заявки #{submission_id} активне. Надішли новий текст, фото, відео або документ. Для скасування використай /cancel.",
+      "active_reminder": "Редагування заявки #{submission_id} активне. Заверш редагування кнопкою збереження або використай /cancel.",
+      "choose_part": "Обери частину заявки #{submission_id} для редагування:",
+      "add_part_prompt": "Додавання нової частини до заявки #{submission_id}. Надішли новий текст, фото, відео або документ. Щоб скасувати, використай /cancel.",
+      "add_part_channel_prompt": "Додавання нової частини до заявки #{submission_id}. Надішли новий текст, фото, відео або документ наступним повідомленням у цьому каналі.",
+      "draft_unavailable": "Не вдалося створити чернетку для цієї частини.",
+      "saved": "Збережено.",
+      "part_added": "Нову частину додано.",
       "prompt": "Редагування заявки #{submission_id} увімкнено. Надішли новий текст, фото, відео або документ. Щоб скасувати редагування, використай /cancel.",
       "channel_prompt": "Редагування заявки #{submission_id} увімкнено. Надішли новий текст, фото, відео або документ наступним повідомленням у цьому каналі.",
       "prompt_detection_prefix": "Редагування заявки #",
-      "prompt_detection_marker": "увімкнено"
+      "prompt_detection_marker": "увімкнено",
+      "add_prompt_detection_prefix": "Додавання нової частини до заявки #",
+      "add_prompt_detection_marker": "Надішли новий"
     },
     "media": {
       "initial_marker": "Початкове медіа для заявки #{submission_id}.",
@@ -54,6 +65,9 @@
     "approve": "✅ Approve",
     "edit": "✏️ Edit",
     "reject": "❌ Reject",
+    "edit_part": "Частина {part_index}",
+    "add_part": "➕ Нова частина",
+    "save": "💾 Зберегти",
     "collector_official_marvel_rivals": "Офіційний сайт"
   },
   "formatter": {
@@ -69,6 +83,7 @@
       "media_url": "URL медіа",
       "source_url": "URL джерела",
       "article_date": "Дата статті",
+      "tags": "Теги",
       "media_message": "Медіа-повідомлення",
       "original_text": "Оригінальний текст / підпис",
       "draft_text": "Поточна чернетка",
@@ -100,8 +115,8 @@
     },
     "published_date": "Дата публікації: {date}",
     "published_datetime": "Дата публікації: {date}, {time} {timezone_label}",
-    "timezone_kyiv": "за Києвом",
-    "timezone_generic": "за часовим поясом {timezone}"
+    "timezone_kyiv": "за Києвом ({offset})",
+    "timezone_generic": "за часовим поясом {timezone} ({offset})"
   },
   "gemini": {
     "fallback_date": "Надійної дати публікації немає.",
@@ -110,7 +125,8 @@
     "source_marker": "Джерело",
     "source_line": "🔗 Джерело: {source_name} {url}",
     "hashtags": "#MarvelRivalsUA #новини",
-    "part_title": "Частина {number}"
+    "part_title": "Частина {number}",
+    "fallback_tag": "новини"
   },
   "collectors": {
     "common": {

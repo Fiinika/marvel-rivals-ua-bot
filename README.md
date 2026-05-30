@@ -11,11 +11,11 @@ MVP Telegram bot for a Ukrainian Marvel Rivals community. Users send text, links
   - videos with optional captions
   - documents with optional captions
 - Stores submissions in SQLite with `pending`, `published`, or `rejected` status.
-- Sends an admin moderation preview with submission metadata and inline buttons.
+- Sends the proposed post part or parts to the moderation chat first, then a separate metadata/control message with inline buttons.
 - Allows only configured admin user IDs to approve, reject, or edit.
 - Publishes approved text or original media to the configured public chat.
 - Handles manual long media captions by publishing the media first, then the draft text as a separate message. Official-news media posts are split before moderation so approved media and caption can publish as one Telegram message.
-- Supports per-admin edit state and `/cancel` for edit cancellation.
+- Supports part-based editing, adding new post parts, and `/cancel` for active edit prompts.
 - Limits user submissions with configurable per-user cooldown.
 - Fetches the official Marvel Rivals news page and creates Ukrainian Gemini drafts for new articles.
 - Sends every AI-generated official news draft to the same admin moderation queue as manual submissions.
@@ -92,9 +92,9 @@ BOT_TOKEN=1234567890:your_real_token_here
 
 A private group or supergroup is recommended. A Telegram channel can be used for moderation previews and buttons, but channel posts do not expose the real admin user ID to the bot.
 
-In channel-based moderation, the admin user ID is checked when `✏️ Edit` is clicked. After that, the next text, photo, video, or document post in the admin channel is treated as the edit for the active submission. The moderation preview is updated, edit mode is closed, and the temporary edit messages are deleted when possible.
+In channel-based moderation, the admin user ID is checked when inline buttons are clicked. Existing parts are edited through copied draft posts with `💾 Зберегти`; new parts are added by clicking `➕ Нова частина` and sending the next text, photo, video, or document post in the admin channel.
 
-Telegram can show modal alerts only after inline button clicks, not after ordinary text messages. After edited text is received, the confirmation is the updated moderation preview itself.
+Telegram can show modal alerts only after inline button clicks, not after ordinary text messages. After a new part is received, the confirmation is the metadata/control message moving back to the bottom.
 
 Recommended method:
 
@@ -235,12 +235,10 @@ On startup the bot validates required environment variables, initializes SQLite 
 Дякуємо! Твою новину відправлено на модерацію.
 ```
 
-5. Check the admin chat for a moderation preview with buttons.
+5. Check the admin chat for the original post content first, then a metadata message with buttons.
 6. Click `✏️ Edit` from an allowed admin account.
-7. Send the edited content:
-   - in the admin chat, if `ADMIN_CHAT_ID` is a group or supergroup
-   - as the next post in the admin channel, if `ADMIN_CHAT_ID` is a channel
-8. Confirm the preview updates and still has approve/edit/reject buttons.
+7. Choose the part to edit, update the copied draft post, then click `💾 Зберегти`.
+8. Confirm the original post message above is updated and the metadata message still has approve/edit/reject buttons.
 9. Click `✅ Approve`.
 10. Confirm the post appears in `PUBLISH_CHAT_ID`.
 11. Send another submission and click `❌ Reject`.
@@ -254,7 +252,7 @@ The official news collector reads `https://www.marvelrivals.com/news/`, extracts
 
 The generated public draft does not include the publication date or source URL. Those fields stay available to admins in the moderation preview as `source_url`, `article_date_display`, and in the full `original_text` context.
 
-Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the existing admin moderation queue with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. Admins can edit the generated draft before publishing.
+Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the existing admin moderation queue with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When Gemini creates multiple logical parts, they stay under one metadata/control message. Admins can edit each part before publishing.
 
 Run a manual check from an allowed admin account:
 
@@ -262,13 +260,13 @@ Run a manual check from an allowed admin account:
 /fetch_news
 ```
 
-The command renders source buttons. For now there is one button: official Marvel Rivals site. After an admin clicks a source, the bot sends a parsing-started status message, then parses one latest unparsed article from that source and reports how many articles were found, how many were already seen, how many were new, how many drafts were created, how many were sent to moderation, and how many failed. Only users listed in `ADMIN_USER_IDS` can run it.
+The command renders source buttons. For now there is one button: official Marvel Rivals site. After an admin clicks a source, the bot sends a parsing-started status message, then processes one latest unparsed article from that source and reports how many articles were found, how many were already seen, how many were new, how many drafts were created, how many were sent to moderation, and how many failed. Only users listed in `ADMIN_USER_IDS` can run it.
 
 Collectors are registered in `services/collectors/registry.py`. The scheduler runs every registered collector when `NEWS_CHECK_INTERVAL_MINUTES` is enabled, so future Reddit or gaming-media collectors can be added to the registry and will be included in scheduled checks automatically. Scheduled runs process unseen articles from the latest stored article publication date in `seen_sources.article_date`, not from the time the bot last parsed the source.
 
 The Gemini prompt lives in `prompts/gemini_news_uk.md`. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
 
-Generated official-news posts get a community navigation footer after the post body and hashtags. Footer text, labels, and URLs live in `locales/uk.json` under `post_footer`, so you can update the visible labels and real community links without touching Python code. On publication the footer is rendered with Telegram HTML links, so admins see labels such as `💬 Чат`, while Telegram opens the configured URLs:
+Every post part gets a community navigation footer after the post body, whether it came from the official-news parser, manual submission, manual edit, or final publication. Footer text, labels, and URLs live in `locales/uk.json` under `post_footer`, so you can update the visible labels and real community links without touching Python code. The footer is rendered with Telegram HTML links, so admins and public subscribers see labels such as `💬 Чат`, while Telegram opens the configured URLs:
 
 ```json
 "post_footer": {
@@ -284,34 +282,33 @@ Generated official-news posts get a community navigation footer after the post b
 
 When a URL is empty, the footer shows only the label.
 
+Published, moderated, and edited text messages are sent with Telegram link previews disabled. This keeps hidden footer links and any body links from creating large embedded preview cards.
+
 Duplicate detection uses the `seen_sources` table. For official Marvel Rivals news, `source_type` is `official_marvel_rivals` and `source_id` is the canonical article URL. An article is marked as seen only after Gemini creates a draft and the moderation preview is sent successfully. If Gemini fails, Telegram moderation sending fails, or the bot crashes before moderation succeeds, the article is not marked as seen.
 
-Media parsing supports `media_type = "photo"` and `media_type = "none"`. The collector prefers Open Graph images, Twitter card images, list/article cover images, and then the first meaningful article image. It filters obvious logos, icons, tracking pixels, avatars, and generic site images. If media cannot be parsed safely, the draft is still created as text-only. If sending a media preview to Telegram moderation fails, the bot logs the error and falls back to a text-only moderation preview.
+AI-generated news tags are stored in SQLite. New tag names are inserted into `tags`, and each submission is linked through `submission_tags`. The admin preview reads tags back from the database and shows them near the article metadata. Gemini returns these tags in a service-only `---TAGS---` block, so they do not appear in the public Telegram post unless an admin manually adds them.
+
+Media parsing supports `media_type = "photo"` and `media_type = "none"`. The collector prefers Open Graph images, Twitter card images, list/article cover images, and then the first meaningful article image. It filters obvious logos, icons, tracking pixels, avatars, and generic site images. If media cannot be parsed safely, the draft is still created as text-only. If sending a media part to Telegram moderation fails, the bot logs the error and falls back to a text-only moderation message.
 
 When an approved AI news item has `media_url` and `media_type = "photo"`, the publisher sends the photo URL directly to Telegram with the edited draft as a caption. AI drafts are split before moderation so the media part fits Telegram's caption limit and can publish as one photo-caption message. If an admin edits the caption beyond Telegram's caption limit, publication fails with an admin alert instead of splitting media and text into separate public posts. If Telegram rejects the external media URL itself, the bot logs the error and publishes the text-only fallback. The bot does not download collector media to disk; it stores only Telegram `file_id` values for user-submitted media and external `media_url` values for collected news.
 
-Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE`. If the source date has no timezone, the collector assumes UTC. Date display uses Ukrainian month names; for the default timezone it looks like `Дата публікації: 29 травня 2026, 18:30 за Києвом`. If only a date is available, it omits the time. If parsing fails, the date is omitted rather than guessed.
+Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE`. If the source date has no timezone, the collector assumes UTC. Date display uses Ukrainian month names and the real Kyiv UTC offset from `zoneinfo`: `UTC+2` in winter and `UTC+3` in summer. For the default timezone it looks like `Дата публікації: 29 травня 2026, 18:30 за Києвом (UTC+3)`. If only a date is available, it omits the time. If parsing fails, the date is omitted rather than guessed.
 
 The current collector supports only the official Marvel Rivals news page and only a single cover image/photo for official news posts. Reddit collection is planned as a future source.
 
 ## Editing Text And Media
 
-After an allowed admin clicks `✏️ Edit`, the next supported message becomes the edit:
+The moderation chat now keeps the publishable post content separate from the control panel:
 
-- Send plain text to replace `Поточна чернетка`.
-- Send a photo to replace the submission media with that photo.
-- Send a video to replace the submission media with that video.
-- Send a document to replace the submission media with that document.
-
-For media edits:
-
-- If the media has a caption, that caption becomes the new `Поточна чернетка`.
-- If the media has no caption, the current draft text stays unchanged.
-- The new media message stays in the moderation chat.
-- The bot marks the new media as added to the draft.
-- The bot marks the previous media as replaced and no longer publishable.
-- The admin preview updates `Тип`, `Файл`, `Медіа-повідомлення`, `Поточна чернетка`, and `Оновлено`.
-- Approval publishes the updated media and current draft text.
+- The first message or messages are the current post parts without buttons.
+- These post part messages render the community footer with clickable Telegram HTML links, matching the publish preview.
+- The last message is the metadata/control message with `✅ Approve`, `✏️ Edit`, and `❌ Reject`.
+- After `✏️ Edit`, the bot shows buttons for every part, even when there is only one part.
+- Choosing a part copies that original message into a temporary draft message with `💾 Зберегти`.
+- After the admin edits the draft message and clicks save, the draft is deleted and the original part message above is updated.
+- In groups where admins cannot directly edit bot messages, sending a new text message while the draft is active updates the draft message; the admin still confirms with `💾 Зберегти`.
+- `➕ Нова частина` starts add-part mode. The next supported admin message is copied into the moderation chat as a new post part, and the metadata/control message is moved to the bottom again.
+- Approval publishes all saved parts in order.
 
 ## Current Limitations
 
@@ -320,9 +317,9 @@ For media edits:
 - Only the official Marvel Rivals news page is supported as an automated source.
 - Only cover image/photo media is supported for official news posts.
 - User submissions are rate-limited per Telegram user ID using the latest saved submission timestamp.
-- Admin media stays in the moderation chat and is marked by the bot when it is original, newly added, or replaced. The editable moderation control panel remains a separate text message.
-- If the moderation chat is a Telegram channel, Telegram does not expose the author of the next channel post to the bot. The bot enforces `ADMIN_USER_IDS` on the `✏️ Edit` click, then accepts the next supported post in that channel as the edit. Use a private group or supergroup if you need every edit message to carry the real admin user ID.
-- There is no special command for clearing a media caption to empty. Sending media without a caption keeps the current draft text.
+- Admin content parts stay in the moderation chat above the metadata/control message.
+- If the moderation chat is a Telegram channel, Telegram does not expose the author of ordinary channel posts to the bot. The bot enforces `ADMIN_USER_IDS` on inline button clicks, then accepts the next supported channel post only for the explicit `➕ Нова частина` flow. Use a private group or supergroup if you need every add-part message to carry the real admin user ID.
+- There is no special command for clearing a text-only part to empty.
 
 ## Planned Future Features
 

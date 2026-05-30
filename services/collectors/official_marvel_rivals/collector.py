@@ -98,13 +98,14 @@ class OfficialMarvelRivalsCollector:
                 stats.duplicates += 1
             else:
                 stats.new += 1
+                if mode == CollectionMode.MANUAL_LATEST:
+                    break
 
     async def _find_latest_unseen_candidate(
         self,
         summaries: list[NewsArticleSummary],
         stats: CollectionStats,
     ) -> ParsedArticleCandidate | None:
-        candidates: list[ParsedArticleCandidate] = []
         for summary in summaries:
             candidate = await self._parse_candidate_if_needed(
                 summary,
@@ -112,15 +113,9 @@ class OfficialMarvelRivalsCollector:
                 latest_seen_article_date=None,
             )
             if candidate is not None:
-                candidates.append(candidate)
+                return candidate
 
-        if not candidates:
-            return None
-
-        return max(
-            enumerate(candidates),
-            key=lambda item: _candidate_sort_key(item[0], item[1]),
-        )[1]
+        return None
 
     async def _parse_candidate_if_needed(
         self,
@@ -165,7 +160,7 @@ class OfficialMarvelRivalsCollector:
         source_url = candidate.source_url
         try:
             max_part_length = 760 if article.media_url and article.media_type == "photo" else 3500
-            draft_parts = await generator.generate_drafts(
+            draft_package = await generator.generate_draft_package(
                 GeminiDraftInput(
                     title=article.title,
                     article_url=source_url,
@@ -178,6 +173,7 @@ class OfficialMarvelRivalsCollector:
                 ),
                 max_part_length=max_part_length,
             )
+            draft_parts = draft_package.draft_parts
             stats.drafts_created += len(draft_parts)
         except Exception as exc:
             stats.failed += 1
@@ -187,25 +183,26 @@ class OfficialMarvelRivalsCollector:
             return False
 
         try:
-            for index, draft_text in enumerate(draft_parts):
-                has_first_part_media = index == 0 and article.media_url and article.media_type == "photo"
-                submission_id = await self.db.create_ai_news_submission(
-                    username=t("collectors.official_marvel_rivals.username"),
-                    original_text=_build_original_text(article, source_url),
-                    draft_text=draft_text,
-                    message_type="photo" if has_first_part_media else "text",
-                    media_url=article.media_url if has_first_part_media else None,
-                    media_type=article.media_type if has_first_part_media else "none",
-                    source_type=SOURCE_TYPE,
-                    source_id=source_id,
-                    source_url=source_url,
-                    article_date=article.date_info.article_date if article.date_info is not None else None,
-                    article_date_display=(
-                        article.date_info.article_date_display if article.date_info is not None else None
-                    ),
-                )
-                await send_submission_to_moderation(self.bot, self.config, self.db, submission_id)
-                stats.sent_to_moderation += 1
+            has_media = bool(article.media_url and article.media_type == "photo")
+            submission_id = await self.db.create_ai_news_submission(
+                username=t("collectors.official_marvel_rivals.username"),
+                original_text=_build_original_text(article, source_url),
+                draft_text=draft_parts[0],
+                draft_parts=draft_parts,
+                message_type="photo" if has_media else "text",
+                media_url=article.media_url if has_media else None,
+                media_type=article.media_type if has_media else "none",
+                source_type=SOURCE_TYPE,
+                source_id=source_id,
+                source_url=source_url,
+                article_date=article.date_info.article_date if article.date_info is not None else None,
+                article_date_display=(
+                    article.date_info.article_date_display if article.date_info is not None else None
+                ),
+                tags=draft_package.tags,
+            )
+            await send_submission_to_moderation(self.bot, self.config, self.db, submission_id)
+            stats.sent_to_moderation += 1
         except Exception as exc:
             stats.failed += 1
             message = t("collector_report.moderation_send_failed", url=source_url, error=exc)
@@ -222,15 +219,6 @@ class OfficialMarvelRivalsCollector:
         )
         logger.info("Created moderation draft for official Marvel Rivals article %s", source_url)
         return True
-
-
-def _candidate_sort_key(index: int, candidate: ParsedArticleCandidate) -> tuple[int, datetime, int]:
-    article_date = candidate.article.date_info.article_date if candidate.article.date_info is not None else None
-    parsed_date = _parse_sortable_article_date(article_date)
-    if parsed_date is None:
-        return (0, datetime.min.replace(tzinfo=timezone.utc), -index)
-
-    return (1, parsed_date, -index)
 
 
 def _is_newer_or_same_article_date(article_date: str | None, latest_seen_article_date: str) -> bool:

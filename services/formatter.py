@@ -12,8 +12,6 @@ MAX_PREVIEW_TEXT_LENGTH = 1200
 def format_admin_preview(submission: dict[str, Any]) -> str:
     username = submission.get("username")
     username_text = f"@{escape(username)}" if username else t("formatter.none")
-    original_text = _format_block(submission.get("original_text"))
-    draft_text = _format_block(submission.get("draft_text"))
     status = str(submission["status"])
     status_text = t_optional(f"status.{status}", status)
 
@@ -30,16 +28,11 @@ def format_admin_preview(submission: dict[str, Any]) -> str:
                 f"<b>{escape(t('formatter.labels.article_date'))}:</b> "
                 f"{_format_inline_value(submission.get('article_date_display'))}"
             ),
+            f"<b>{escape(t('formatter.labels.tags'))}:</b> {_format_tags(submission.get('tags'))}",
             (
                 f"<b>{escape(t('formatter.labels.media_message'))}:</b> "
                 f"{_format_message_id(submission.get('admin_media_message_id'))}"
             ),
-            "",
-            f"<b>{escape(t('formatter.labels.original_text'))}:</b>",
-            original_text,
-            "",
-            f"<b>{escape(t('formatter.labels.draft_text'))}:</b>",
-            draft_text,
             "",
             f"<b>{escape(t('formatter.labels.status'))}:</b> <code>{escape(status_text)}</code>",
             f"<b>{escape(t('formatter.labels.created_at'))}:</b> <code>{escape(str(submission['created_at']))}</code>",
@@ -79,6 +72,21 @@ def _format_message_id(message_id: object | None) -> str:
         return f"<i>{escape(t('formatter.none'))}</i>"
 
     return f"<code>{escape(str(message_id))}</code>"
+
+
+def _format_tags(tags: object | None) -> str:
+    if not tags:
+        return f"<i>{escape(t('formatter.none'))}</i>"
+
+    if isinstance(tags, list):
+        values = [str(tag) for tag in tags if str(tag).strip()]
+    else:
+        values = [str(tags)]
+
+    if not values:
+        return f"<i>{escape(t('formatter.none'))}</i>"
+
+    return ", ".join(f"<code>{escape(value)}</code>" for value in values)
 
 
 def _short_file_id(file_id: str) -> str:
