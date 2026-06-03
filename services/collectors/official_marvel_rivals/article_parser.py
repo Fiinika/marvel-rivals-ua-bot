@@ -26,6 +26,7 @@ class ParsedArticle:
     body_text: str
     raw_excerpt: str | None
     media_url: str | None
+    media_urls: tuple[str, ...]
     media_type: str
 
 
@@ -76,6 +77,7 @@ class ArticleParser:
             body_text=body_text,
             raw_excerpt=summary.raw_excerpt,
             media_url=media.media_url,
+            media_urls=media.media_urls,
             media_type=media.media_type,
         )
 
@@ -90,6 +92,7 @@ class ArticleParser:
             body_text=summary.raw_excerpt or "",
             raw_excerpt=summary.raw_excerpt,
             media_url=summary.cover_image_url,
+            media_urls=(summary.cover_image_url,) if summary.cover_image_url else (),
             media_type="photo" if summary.cover_image_url else "none",
         )
 

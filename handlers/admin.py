@@ -31,7 +31,7 @@ from services.collectors.registry import (
 )
 from services.formatter import format_admin_preview
 from services.i18n import t
-from services.post_footer import format_post_html, strip_community_footer
+from services.post_footer import format_post_html
 from services.publisher import (
     DISABLED_LINK_PREVIEW,
     PublishingError,
@@ -392,7 +392,7 @@ async def update_draft_from_admin_message(message: Message, bot: Bot, config: Co
         await message.answer(t("admin.alert.submission_not_found"))
         return
 
-    new_text = strip_community_footer(_message_text(message)).strip()
+    new_text = _message_text(message).strip()
     validation_error = _validate_part_text(part, new_text)
     if validation_error is not None:
         await message.answer(validation_error)
@@ -700,7 +700,7 @@ async def _save_part_draft(
         await _answer_callback(callback, t("admin.alert.submission_not_found"), show_alert=True)
         return
 
-    new_text = strip_community_footer(_message_text(callback.message)).strip()
+    new_text = _message_text(callback.message).strip()
     validation_error = _validate_part_text(part, new_text)
     if validation_error is not None:
         await _answer_callback(callback, validation_error, show_alert=True)
@@ -742,9 +742,9 @@ async def _copy_part_to_draft_message(
 
 async def _send_part_draft_message(bot: Bot, chat_id: int, part: dict, *, reply_markup):
     message_type = str(part.get("message_type") or "text")
-    text = _format_part_for_moderation(str(part.get("text") or ""))
+    text = _format_part_for_moderation(str(part.get("text") or ""), part)
     media_value = part.get("file_id") or part.get("media_url")
-    if message_type == "photo" and media_value:
+    if _part_has_media(part) and message_type == "photo" and media_value:
         return await bot.send_photo(
             chat_id=chat_id,
             photo=media_value,
@@ -752,7 +752,7 @@ async def _send_part_draft_message(bot: Bot, chat_id: int, part: dict, *, reply_
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
-    if message_type == "video" and media_value:
+    if _part_has_media(part) and message_type == "video" and media_value:
         return await bot.send_video(
             chat_id=chat_id,
             video=media_value,
@@ -760,7 +760,7 @@ async def _send_part_draft_message(bot: Bot, chat_id: int, part: dict, *, reply_
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
-    if message_type == "document" and media_value:
+    if _part_has_media(part) and message_type == "document" and media_value:
         return await bot.send_document(
             chat_id=chat_id,
             document=media_value,
@@ -898,7 +898,7 @@ async def _edit_original_part_message(bot: Bot, config: Config, part: dict, new_
         logger.warning("Submission part %s has no admin_message_id", part.get("part_index"))
         return False
 
-    display_text = _format_part_for_moderation(new_text)
+    display_text = _format_part_for_moderation(new_text, part)
     try:
         if _part_has_media(part):
             await bot.edit_message_caption(
@@ -933,7 +933,7 @@ async def _edit_draft_part_message(bot: Bot, config: Config, state: dict, part: 
         return False
 
     reply_markup = save_draft_keyboard(int(state["submission_id"]), int(state["part_index"]))
-    display_text = _format_part_for_moderation(new_text)
+    display_text = _format_part_for_moderation(new_text, part)
     try:
         if _part_has_media(part):
             await bot.edit_message_caption(
@@ -973,7 +973,7 @@ def _message_text(message: Message) -> str:
 
 
 def _validate_part_text(part: dict, text: str) -> str | None:
-    rendered_text = _format_part_for_moderation(text)
+    rendered_text = _format_part_for_moderation(text, part)
     if _part_has_media(part):
         if _html_visible_length(rendered_text) > TELEGRAM_CAPTION_LIMIT:
             return t("admin.alert.text_too_long")
@@ -986,8 +986,14 @@ def _validate_part_text(part: dict, text: str) -> str | None:
     return None
 
 
-def _format_part_for_moderation(text: str) -> str:
-    return format_post_html(text)
+def _format_part_for_moderation(text: str, part: dict | None = None) -> str:
+    part = part or {}
+    return format_post_html(
+        text,
+        source_url=str(part.get("source_url") or ""),
+        allow_source_link=_is_official_source_part(part),
+        include_community_footer=_is_official_source_part(part),
+    )
 
 
 def _caption_or_none(text: str) -> str | None:
@@ -1006,13 +1012,27 @@ def _html_visible_length(text: str) -> int:
 
 
 def _part_has_media(part: dict) -> bool:
-    return str(part.get("message_type") or "") in {"photo", "video", "document"} and bool(
-        part.get("file_id") or part.get("media_url")
-    )
+    if str(part.get("message_type") or "") not in {"photo", "video", "document"}:
+        return False
+    if not (part.get("file_id") or part.get("media_url")):
+        return False
+
+    admin_message_id = part.get("admin_message_id")
+    admin_media_message_id = part.get("admin_media_message_id")
+    if admin_message_id is not None and admin_media_message_id is None:
+        return False
+    if admin_message_id is None or admin_media_message_id is None:
+        return True
+
+    return int(admin_message_id) == int(admin_media_message_id)
 
 
 def _media_type_for(message_type: str) -> str:
     return message_type if message_type in {"photo", "video", "document"} else "none"
+
+
+def _is_official_source_part(part: dict) -> bool:
+    return str(part.get("source_type") or "") == "official_marvel_rivals"
 
 
 async def _update_admin_preview(

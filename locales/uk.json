@@ -115,7 +115,7 @@
     },
     "published_date": "Дата публікації: {date}",
     "published_datetime": "Дата публікації: {date}, {time} {timezone_label}",
-    "timezone_kyiv": "за Києвом ({offset})",
+    "timezone_kyiv": "за Києвом",
     "timezone_generic": "за часовим поясом {timezone} ({offset})"
   },
   "gemini": {
@@ -123,10 +123,10 @@
     "fallback_body": "Текст статті відсутній або не вдалося надійно витягти.",
     "date_marker": "Дата публікації:",
     "source_marker": "Джерело",
-    "source_line": "🔗 Джерело: {source_name} {url}",
-    "hashtags": "#MarvelRivalsUA #новини",
+    "source_line": "Повні деталі — на офіційному сайті.",
+    "hashtags": "#MarvelRivalsUA #Офіційно",
     "part_title": "Частина {number}",
-    "fallback_tag": "новини"
+    "fallback_tag": "офіційно"
   },
   "collectors": {
     "common": {
@@ -151,21 +151,21 @@
     }
   },
   "post_footer": {
-    "separator": "━━━━━━━━━━━━━━━━━━━━",
-    "title": "Навігація по комʼюніті 👇",
+    "separator": "────────────────",
+    "title": "Навігація по ком’юніті 👇",
     "link_separator": " | ",
     "links": {
       "chat": {
         "label": "💬 Чат",
-        "url": "https://t.me/UAMarvelRivalsChat"
+        "url": ""
       },
       "submission": {
         "label": "🤖 Запропонувати новину",
-        "url": "https://t.me/MarvelRivalsUABot"
+        "url": ""
       },
       "discord": {
         "label": "🎧 Discord",
-        "url": "https://discord.gg/953cRRVD"
+        "url": ""
       }
     }
   },

@@ -10,12 +10,17 @@ from bs4 import BeautifulSoup, Tag
 logger = logging.getLogger(__name__)
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+MAX_ARTICLE_MEDIA_ITEMS = 4
 
 
 @dataclass(frozen=True)
 class ArticleMedia:
-    media_url: str | None
+    media_urls: tuple[str, ...]
     media_type: str
+
+    @property
+    def media_url(self) -> str | None:
+        return self.media_urls[0] if self.media_urls else None
 
 
 def extract_article_media(
@@ -46,6 +51,7 @@ def extract_article_media(
         if src:
             candidates.append(("article image", str(src)))
 
+    selected_urls: list[str] = []
     seen_urls: set[str] = set()
     for source, candidate in candidates:
         media_url = _normalize_url(candidate, page_url)
@@ -55,12 +61,18 @@ def extract_article_media(
 
         if _is_meaningful_photo_url(media_url):
             logger.info("Selected article media from %s: %s", source, media_url)
-            return ArticleMedia(media_url=media_url, media_type="photo")
+            selected_urls.append(media_url)
+            if len(selected_urls) >= MAX_ARTICLE_MEDIA_ITEMS:
+                break
+            continue
 
         logger.debug("Skipped non-article media candidate from %s: %s", source, media_url)
 
+    if selected_urls:
+        return ArticleMedia(media_urls=tuple(selected_urls), media_type="photo")
+
     logger.info("No safe article media found for %s", page_url)
-    return ArticleMedia(media_url=None, media_type="none")
+    return ArticleMedia(media_urls=(), media_type="none")
 
 
 def _meta_content(soup: BeautifulSoup, selector: str) -> str | None:

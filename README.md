@@ -14,13 +14,13 @@ MVP Telegram bot for a Ukrainian Marvel Rivals community. Users send text, links
 - Sends the proposed post part or parts to the moderation chat first, then a separate metadata/control message with inline buttons.
 - Allows only configured admin user IDs to approve, reject, or edit.
 - Publishes approved text or original media to the configured public chat.
-- Handles manual long media captions by publishing the media first, then the draft text as a separate message. Official-news media posts are split before moderation so approved media and caption can publish as one Telegram message.
+- Handles manual long media captions by publishing the media first, then the draft text as a separate message. Official-news drafts are intentionally short to avoid moderation spam, and media captions fall back to a separate text draft when needed.
 - Supports part-based editing, adding new post parts, and `/cancel` for active edit prompts.
 - Limits user submissions with configurable per-user cooldown.
 - Fetches the official Marvel Rivals news page and creates Ukrainian Gemini drafts for new articles.
 - Sends every AI-generated official news draft to the same admin moderation queue as manual submissions.
 - Tracks already moderated official articles in SQLite to avoid duplicate drafts.
-- Supports official news cover images/photos when a safe media URL is detected.
+- Supports official news cover images/photos when safe media URLs are detected, with extra images reserved for relevant later parts instead of being spammed.
 
 ## What It Does Not Do Yet
 
@@ -61,6 +61,7 @@ services/
   publisher.py
 prompts/
   gemini_news_uk.md
+  official_news_style.md
 locales/
   uk.json
 README.md
@@ -194,6 +195,10 @@ GEMINI_MODEL=gemini-2.5-flash
 OFFICIAL_NEWS_URL=https://www.marvelrivals.com/news/
 NEWS_CHECK_INTERVAL_MINUTES=30
 ARTICLE_TIMEZONE=Europe/Kyiv
+ENABLE_COMMUNITY_FOOTER=true
+COMMUNITY_CHAT_URL=
+SUBMISSION_BOT_URL=
+DISCORD_URL=
 ```
 
 Optional:
@@ -208,13 +213,17 @@ If `DATABASE_PATH` is omitted, the bot creates `bot.db` in the project directory
 
 `GEMINI_API_KEY` enables AI draft generation for official news. Create a key in Google AI Studio at `https://aistudio.google.com/app/apikey`, then paste it into `.env`. If this value is missing, the bot still starts and manual submissions still work; the collector logs a clear warning and skips AI draft generation.
 
-`GEMINI_MODEL` controls which Gemini model creates Ukrainian Telegram drafts. The recommended default is `gemini-2.5-flash`, which is better suited here than Flash-Lite because these drafts need longer structured output and stronger instruction-following. The prompt asks Gemini to create fuller, clearer posts, split large articles into logical parts, and follow the glossary rules in `prompts/gemini_news_uk.md`.
+`GEMINI_MODEL` controls which Gemini model creates Ukrainian Telegram drafts. The recommended default is `gemini-2.5-flash`. The prompt asks Gemini to create concise, readable posts, convert UTC schedules to Kyiv time when reliable, and follow the glossary rules in `prompts/gemini_news_uk.md`.
 
 `OFFICIAL_NEWS_URL` controls the official Marvel Rivals news list URL. The default is `https://www.marvelrivals.com/news/`.
 
 `NEWS_CHECK_INTERVAL_MINUTES` enables the background collector scheduler when it is a positive integer and `GEMINI_API_KEY` is set. The default is `30`. Leave it empty or set an invalid value to disable automatic scheduled checks.
 
-`ARTICLE_TIMEZONE` controls article date conversion for drafts and metadata. The default is `Europe/Kyiv`.
+`ARTICLE_TIMEZONE` controls article date conversion for admin metadata and reliable in-article schedules. The default is `Europe/Kyiv`; public event/shop/patch/maintenance times are shown as Kyiv time with `за Києвом` wording when conversion is reliable.
+
+`ENABLE_COMMUNITY_FOOTER` controls whether official AI-generated news drafts include the community navigation footer. The default is `true` for this project. Set it to `false` to omit the footer from official AI news drafts. Manual user submissions do not get this footer automatically.
+
+`COMMUNITY_CHAT_URL`, `SUBMISSION_BOT_URL`, and `DISCORD_URL` make the footer items clickable. Leave any of them empty to keep that item as plain text. The bot validates that configured footer URLs use `http` or `https` before rendering Telegram HTML links.
 
 ## Run Locally
 
@@ -248,11 +257,11 @@ On startup the bot validates required environment variables, initializes SQLite 
 
 ## Official News Collector
 
-The official news collector reads `https://www.marvelrivals.com/news/`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and a safe cover image/photo when available, then asks Gemini to create a Ukrainian Telegram-ready draft. The draft is intentionally not compressed to a few sentences; long official articles are grouped into readable sections and bullet lists.
+The official news collector reads `https://www.marvelrivals.com/news/`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and a safe cover image/photo when available, then asks Gemini to create a Ukrainian Telegram-ready draft. Drafts are intentionally concise, usually one moderation post around 400-900 characters, so a long article does not become a noisy 6-10 part moderation batch.
 
-The generated public draft does not include the publication date or source URL. Those fields stay available to admins in the moderation preview as `source_url`, `article_date_display`, and in the full `original_text` context.
+The generated public draft includes only publishable post content and official hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata. Public posts do not show raw source URLs; source attribution is rendered as `Повні деталі — на офіційному сайті.`, where `офіційному сайті` is a Telegram HTML link to the stored `source_url`.
 
-Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the existing admin moderation queue with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When Gemini creates multiple logical parts, they stay under one metadata/control message. Admins can edit each part before publishing.
+Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the existing admin moderation queue with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When a draft must be split, the parts stay under one metadata/control message, but official news is biased toward one concise preview. Admins can edit each part before publishing.
 
 Run a manual check from an allowed admin account:
 
@@ -264,44 +273,44 @@ The command renders source buttons. For now there is one button: official Marvel
 
 Collectors are registered in `services/collectors/registry.py`. The scheduler runs every registered collector when `NEWS_CHECK_INTERVAL_MINUTES` is enabled, so future Reddit or gaming-media collectors can be added to the registry and will be included in scheduled checks automatically. Scheduled runs process unseen articles from the latest stored article publication date in `seen_sources.article_date`, not from the time the bot last parsed the source.
 
-The Gemini prompt lives in `prompts/gemini_news_uk.md`. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
+The Gemini wrapper prompt lives in `prompts/gemini_news_uk.md`. The editable official-news style guide lives in `prompts/official_news_style.md`; update that file to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing Python code. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
 
-Every post part gets a community navigation footer after the post body, whether it came from the official-news parser, manual submission, manual edit, or final publication. Footer text, labels, and URLs live in `locales/uk.json` under `post_footer`, so you can update the visible labels and real community links without touching Python code. The footer is rendered with Telegram HTML links, so admins and public subscribers see labels such as `💬 Чат`, while Telegram opens the configured URLs:
+Official AI posts are styled as Telegram gaming-community updates, not article summaries. The prompt asks for a short headline, 1-3 compact blocks, relevant emoji markers, natural Ukrainian, no greetings, no clickbait, no raw Markdown, no public metadata, and no copied patch-note wall. Post-processing sanitizes Markdown artifacts such as `**bold**`, `*` bullets, raw headings, excessive asterisks, duplicated blank lines, misplaced hashtags, raw source URLs, and public `Дата публікації` / `Джерело` lines before moderation. The code detects broad article types from title/body keywords and passes the matching style context to Gemini: shop/skins/bundles, event/rewards/login bonus, patch notes/game update, trailer/teaser/map reveal, vote/community choice, or short announcement. Normal posts target 400-900 characters and are capped at 1200; large patch notes are capped at 1600 and should use 3-5 grouped highlights.
 
-```json
-"post_footer": {
-  "separator": "━━━━━━━━━━━━━━━━━━━━",
-  "title": "Навігація по комʼюніті 👇",
-  "links": {
-    "chat": { "label": "💬 Чат", "url": "https://t.me/UAMarvelRivalsChat" },
-    "submission": { "label": "🤖 Запропонувати новину", "url": "https://t.me/MarvelRivalsUABot" },
-    "discord": { "label": "🎧 Discord", "url": "https://discord.gg/953cRRVD" }
-  }
-}
+The admin moderation preview keeps metadata separate from the publishable draft. For official news it shows the submission ID, source, article title, detected category, Kyiv article date when available, source URL, truncated draft preview, tags, status, and the normal approve/edit/reject buttons. It does not dump the full parsed article body into Telegram; full `original_text` remains stored in the database for context.
+
+The community navigation footer is optional and enabled by default through `ENABLE_COMMUNITY_FOOTER=true`. It is added only to official AI-generated news drafts, after the hashtags, and is shown in moderation so admins see the final publishable post:
+
+```text
+#MarvelRivalsUA #Офіційно #Анонс
+
+---
+Навігація по ком’юніті 👇
+💬 Чат | 🤖 Запропонувати новину | 🎧 Discord
 ```
 
-When a URL is empty, the footer shows only the label.
+Footer labels live in `locales/uk.json` under `post_footer`. Footer URLs come from `.env`: `COMMUNITY_CHAT_URL`, `SUBMISSION_BOT_URL`, and `DISCORD_URL`. If a URL is configured, that item is rendered as a safe Telegram HTML link; if a URL is empty or invalid, the item stays plain text. Admins can still edit the visible footer text while editing the draft before approval.
 
-Published, moderated, and edited text messages are sent with Telegram link previews disabled. This keeps hidden footer links and any body links from creating large embedded preview cards.
+Published, moderated, and edited text messages are sent with Telegram link previews disabled. This keeps hidden footer links and any body links from creating large embedded preview cards. Telegram sends use a 30 second request timeout and retry retryable network failures, flood-wait responses, `TimeoutError`, and `aiohttp.ClientOSError` up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
 
-Duplicate detection uses the `seen_sources` table. For official Marvel Rivals news, `source_type` is `official_marvel_rivals` and `source_id` is the canonical article URL. An article is marked as seen only after Gemini creates a draft and the moderation preview is sent successfully. If Gemini fails, Telegram moderation sending fails, or the bot crashes before moderation succeeds, the article is not marked as seen.
+Duplicate detection uses the `seen_sources` table. For official Marvel Rivals news, `source_type` is `official_marvel_rivals` and `source_id` is the canonical article URL. An article is marked as seen only after Gemini creates a draft and the moderation preview is sent successfully. If Gemini fails, Telegram moderation sending fails, or the bot crashes before moderation succeeds, the article is not marked as seen and `/fetch_news` can try it again later.
 
-AI-generated news tags are stored in SQLite. New tag names are inserted into `tags`, and each submission is linked through `submission_tags`. The admin preview reads tags back from the database and shows them near the article metadata. Gemini returns these tags in a service-only `---TAGS---` block, so they do not appear in the public Telegram post unless an admin manually adds them.
+AI-generated official news tags are deterministic. Every official article gets `#MarvelRivalsUA` and `#Офіційно`, then up to three Ukrainian topic hashtags based on the title/body, such as `#Патч`, `#Фікси`, `#Баланс`, `#Івент`, `#Магазин`, `#Скіни`, `#Герої`, `#Карта`, `#Геймплей`, `#Сезон`, `#ТехнічніРоботи`, `#Рейтинг`, `#Трейлер`, `#Голосування`, `#Анонс`, or `#Кіберспорт`. If nothing specific matches, the fallback is `#MarvelRivalsUA #Офіційно #Анонс`.
 
-Media parsing supports `media_type = "photo"` and `media_type = "none"`. The collector prefers Open Graph images, Twitter card images, list/article cover images, and then the first meaningful article image. It filters obvious logos, icons, tracking pixels, avatars, and generic site images. If media cannot be parsed safely, the draft is still created as text-only. If sending a media part to Telegram moderation fails, the bot logs the error and falls back to a text-only moderation message.
+Media parsing supports `media_type = "photo"` and `media_type = "none"`. The collector prefers Open Graph images, Twitter card images, list/article cover images, and meaningful article images. It filters obvious logos, icons, tracking pixels, avatars, and generic site images. The first safe image remains the primary media. If multiple meaningful images are parsed and the draft has multiple real parts, later parts can receive later media URLs; a normal article still usually creates one media moderation message. If media cannot be parsed safely, the draft is still created as text-only. If sending external media to Telegram moderation fails after retries, the bot logs the error and falls back to a text-only moderation message.
 
-When an approved AI news item has `media_url` and `media_type = "photo"`, the publisher sends the photo URL directly to Telegram with the edited draft as a caption. AI drafts are split before moderation so the media part fits Telegram's caption limit and can publish as one photo-caption message. If an admin edits the caption beyond Telegram's caption limit, publication fails with an admin alert instead of splitting media and text into separate public posts. If Telegram rejects the external media URL itself, the bot logs the error and publishes the text-only fallback. The bot does not download collector media to disk; it stores only Telegram `file_id` values for user-submitted media and external `media_url` values for collected news.
+When an approved AI news item has `media_url` and `media_type = "photo"`, the publisher sends the photo URL directly to Telegram with the edited draft as a caption when it fits. If the caption is too long for Telegram, it publishes the image first and then the edited text as one separate message. If the item has multiple saved parts with relevant media on later parts, those parts are published in order using the same caption rules. If Telegram rejects an external media URL itself, the bot logs the error and publishes the text-only fallback. The bot does not download collector media to disk; it stores only Telegram `file_id` values for user-submitted media and external `media_url` values for collected news.
 
-Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE`. If the source date has no timezone, the collector assumes UTC. Date display uses Ukrainian month names and the real Kyiv UTC offset from `zoneinfo`: `UTC+2` in winter and `UTC+3` in summer. For the default timezone it looks like `Дата публікації: 29 травня 2026, 18:30 за Києвом (UTC+3)`. If only a date is available, it omits the time. If parsing fails, the date is omitted rather than guessed.
+Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE` with `zoneinfo`. If a source date includes a time but no timezone, the bot does not assume UTC; it keeps date-only metadata instead. Public posts should show visible times only as Kyiv time with `за Києвом` when conversion is reliable. Common `HH:MM UTC/GMT` event schedules from article text are converted to Kyiv time and supplied to Gemini as notes; post-processing also replaces matching raw UTC/GMT times when those notes are available. If conversion is uncertain, the prompt tells Gemini to avoid guessing and omit the time or keep date-only wording.
 
-The current collector supports only the official Marvel Rivals news page and only a single cover image/photo for official news posts. Reddit collection is planned as a future source.
+The current collector supports only the official Marvel Rivals news page. Reddit collection is planned as a future source.
 
 ## Editing Text And Media
 
 The moderation chat now keeps the publishable post content separate from the control panel:
 
 - The first message or messages are the current post parts without buttons.
-- These post part messages render the community footer with clickable Telegram HTML links, matching the publish preview.
+- When `ENABLE_COMMUNITY_FOOTER=true`, official AI news post part messages render the community footer with clickable Telegram HTML links, matching the publish preview. Manual submissions are not given this footer automatically.
 - The last message is the metadata/control message with `✅ Approve`, `✏️ Edit`, and `❌ Reject`.
 - After `✏️ Edit`, the bot shows buttons for every part, even when there is only one part.
 - Choosing a part copies that original message into a temporary draft message with `💾 Зберегти`.
@@ -315,7 +324,7 @@ The moderation chat now keeps the publishable post content separate from the con
 - Polling mode only, no webhook setup.
 - No role management inside Telegram. Admin access comes only from `ADMIN_USER_IDS`.
 - Only the official Marvel Rivals news page is supported as an automated source.
-- Only cover image/photo media is supported for official news posts.
+- Official news media support is photo-only; videos are not parsed yet.
 - User submissions are rate-limited per Telegram user ID using the latest saved submission timestamp.
 - Admin content parts stay in the moderation chat above the metadata/control message.
 - If the moderation chat is a Telegram channel, Telegram does not expose the author of ordinary channel posts to the bot. The bot enforces `ADMIN_USER_IDS` on inline button clicks, then accepts the next supported channel post only for the explicit `➕ Нова частина` flow. Use a private group or supergroup if you need every add-part message to carry the real admin user ID.

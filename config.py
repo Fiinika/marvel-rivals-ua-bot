@@ -23,6 +23,7 @@ class Config:
     official_news_url: str = "https://www.marvelrivals.com/news/"
     news_check_interval_minutes: int | None = 30
     article_timezone: str = "Europe/Kyiv"
+    enable_community_footer: bool = True
 
 
 def load_config() -> Config:
@@ -40,6 +41,7 @@ def load_config() -> Config:
     official_news_url = official_news_url or "https://www.marvelrivals.com/news/"
     news_check_interval_minutes = _optional_positive_int_or_none("NEWS_CHECK_INTERVAL_MINUTES", 30)
     article_timezone = os.getenv("ARTICLE_TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
+    enable_community_footer = _optional_bool("ENABLE_COMMUNITY_FOOTER", True)
 
     return Config(
         bot_token=bot_token,
@@ -53,6 +55,7 @@ def load_config() -> Config:
         official_news_url=official_news_url,
         news_check_interval_minutes=news_check_interval_minutes,
         article_timezone=article_timezone,
+        enable_community_footer=enable_community_footer,
     )
 
 
@@ -104,6 +107,20 @@ def _optional_positive_int_or_none(name: str, default: int | None) -> int | None
         return None
 
     return parsed
+
+
+def _optional_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+
+    raise ConfigError(f"{name} must be true or false")
 
 
 def _parse_admin_user_ids(value: str) -> frozenset[int]:

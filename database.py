@@ -232,10 +232,15 @@ class Database:
         article_date_display: str | None,
         tags: list[str] | None = None,
         draft_parts: list[str] | None = None,
+        additional_media_urls: list[str] | None = None,
     ) -> int:
         now = utc_now()
         normalized_draft_parts = _normalize_text_parts(draft_parts or [draft_text])
         stored_draft_text = _parts_to_draft_text(normalized_draft_parts)
+        media_urls = _normalize_media_urls(media_url, additional_media_urls or [], media_type)
+        primary_media_url = media_urls[0] if media_urls else None
+        stored_media_type = media_type if primary_media_url else "none"
+        stored_message_type = message_type if primary_media_url else "text"
 
         async with self._connect() as db:
             cursor = await db.execute(
@@ -263,12 +268,12 @@ class Database:
                 (
                     0,
                     username,
-                    message_type,
+                    stored_message_type,
                     original_text,
                     stored_draft_text,
                     None,
-                    media_url,
-                    media_type,
+                    primary_media_url,
+                    stored_media_type,
                     source_url,
                     source_type,
                     source_id,
@@ -282,15 +287,16 @@ class Database:
             submission_id = int(cursor.lastrowid)
             part_rows = []
             for index, part_text in enumerate(normalized_draft_parts, start=1):
-                has_first_part_media = index == 1 and media_url and media_type != "none"
-                part_message_type = message_type if has_first_part_media else "text"
+                part_media_url = media_urls[index - 1] if index <= len(media_urls) else None
+                has_part_media = bool(part_media_url and stored_media_type != "none")
+                part_message_type = stored_message_type if has_part_media else "text"
                 part_rows.append(
                     {
                         "message_type": part_message_type,
                         "text": part_text,
                         "file_id": None,
-                        "media_url": media_url if has_first_part_media else None,
-                        "media_type": media_type if has_first_part_media else "none",
+                        "media_url": part_media_url if has_part_media else None,
+                        "media_type": stored_media_type if has_part_media else "none",
                     }
                 )
             await self._replace_submission_parts(db, submission_id, part_rows, now)
@@ -771,7 +777,12 @@ class Database:
         )
         rows = await cursor.fetchall()
         if rows:
-            return [dict(row) for row in rows]
+            parts = [dict(row) for row in rows]
+            for part in parts:
+                part["admin_media_message_id"] = _admin_media_message_id_for_part(part, submission)
+                part["source_url"] = submission.get("source_url")
+                part["source_type"] = submission.get("source_type")
+            return parts
 
         return [_fallback_submission_part(submission)]
 
@@ -834,8 +845,39 @@ def _parts_to_draft_text(parts: list[str]) -> str:
     return "\n\n".join(part for part in parts if part).strip()
 
 
+def _normalize_media_urls(primary_media_url: str | None, additional_media_urls: list[str], media_type: str) -> list[str]:
+    if media_type == "none":
+        return []
+
+    normalized_urls: list[str] = []
+    seen: set[str] = set()
+    for value in [primary_media_url, *additional_media_urls]:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        normalized_urls.append(normalized)
+
+        if len(normalized_urls) >= 4:
+            break
+
+    return normalized_urls
+
+
 def _media_type_for(message_type: str) -> str:
     return message_type if message_type in {"photo", "video", "document"} else "none"
+
+
+def _admin_media_message_id_for_part(part: SubmissionPart, submission: Submission) -> object | None:
+    message_type = str(part.get("message_type") or "text")
+    if message_type not in {"photo", "video", "document"}:
+        return None
+
+    if int(part.get("part_index") or 0) == 1:
+        return submission.get("admin_media_message_id")
+
+    return part.get("admin_message_id")
 
 
 def _fallback_submission_part(submission: Submission) -> SubmissionPart:
@@ -849,6 +891,9 @@ def _fallback_submission_part(submission: Submission) -> SubmissionPart:
         "media_url": submission.get("media_url"),
         "media_type": submission.get("media_type") or _media_type_for(message_type),
         "admin_message_id": submission.get("admin_media_message_id"),
+        "admin_media_message_id": submission.get("admin_media_message_id"),
+        "source_url": submission.get("source_url"),
+        "source_type": submission.get("source_type"),
         "created_at": submission.get("created_at"),
         "updated_at": submission.get("updated_at"),
     }

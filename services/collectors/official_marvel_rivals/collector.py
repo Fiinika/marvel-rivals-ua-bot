@@ -11,6 +11,7 @@ from database import Database
 from services.collectors.base import CollectionMode, CollectionStats, CollectorDefinition, empty_stats
 from services.collectors.official_marvel_rivals.article_parser import ArticleParser, ParsedArticle
 from services.collectors.official_marvel_rivals.news_fetcher import NewsArticleSummary, OfficialNewsFetcher
+from services.date_utils import build_utc_time_conversion_notes
 from services.gemini import GeminiDraftGenerator, GeminiDraftInput
 from services.i18n import t
 from services.moderation import send_submission_to_moderation
@@ -159,7 +160,13 @@ class OfficialMarvelRivalsCollector:
         source_id = candidate.source_id
         source_url = candidate.source_url
         try:
-            max_part_length = 760 if article.media_url and article.media_type == "photo" else 3500
+            has_photo = bool(article.media_url and article.media_type == "photo")
+            max_part_length = 900 if has_photo else 1600
+            datetime_notes = build_utc_time_conversion_notes(
+                article.body_text or article.raw_excerpt or "",
+                article_date=article.date_info.article_date if article.date_info is not None else None,
+                target_timezone=self.config.article_timezone,
+            )
             draft_package = await generator.generate_draft_package(
                 GeminiDraftInput(
                     title=article.title,
@@ -167,6 +174,7 @@ class OfficialMarvelRivalsCollector:
                     article_date_display=(
                         article.date_info.article_date_display if article.date_info is not None else None
                     ),
+                    datetime_notes=datetime_notes,
                     body_text=article.body_text or article.raw_excerpt or "",
                     source_type=SOURCE_TYPE,
                     source_name=t("collectors.official_marvel_rivals.source_name"),
@@ -186,7 +194,7 @@ class OfficialMarvelRivalsCollector:
             has_media = bool(article.media_url and article.media_type == "photo")
             submission_id = await self.db.create_ai_news_submission(
                 username=t("collectors.official_marvel_rivals.username"),
-                original_text=_build_original_text(article, source_url),
+                original_text=_build_original_text(article, source_url, self.config.article_timezone),
                 draft_text=draft_parts[0],
                 draft_parts=draft_parts,
                 message_type="photo" if has_media else "text",
@@ -200,6 +208,7 @@ class OfficialMarvelRivalsCollector:
                     article.date_info.article_date_display if article.date_info is not None else None
                 ),
                 tags=draft_package.tags,
+                additional_media_urls=list(article.media_urls[1:]) if has_media else None,
             )
             await send_submission_to_moderation(self.bot, self.config, self.db, submission_id)
             stats.sent_to_moderation += 1
@@ -248,7 +257,7 @@ def _parse_sortable_article_date(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _build_original_text(article: ParsedArticle, source_url: str) -> str:
+def _build_original_text(article: ParsedArticle, source_url: str, article_timezone: str) -> str:
     parts = [
         t("collectors.common.original_text.article_title", value=article.title),
         t("collectors.common.original_text.article_url", value=source_url),
@@ -264,16 +273,27 @@ def _build_original_text(article: ParsedArticle, source_url: str) -> str:
             )
         )
 
+    datetime_notes = build_utc_time_conversion_notes(
+        article.body_text or article.raw_excerpt or "",
+        article_date=article.date_info.article_date if article.date_info is not None else None,
+        target_timezone=article_timezone,
+    )
+    if datetime_notes:
+        parts.extend(["", "Конвертація UTC-часів для чернетки:", datetime_notes])
+
     if article.body_text:
         parts.extend(["", t("collectors.common.original_text.parsed_article_text"), article.body_text])
     elif article.raw_excerpt:
         parts.extend(["", t("collectors.common.original_text.parsed_excerpt"), article.raw_excerpt])
 
-    if article.media_url:
+    if article.media_urls:
+        media_lines: list[str] = []
+        for media_url in article.media_urls:
+            media_lines.append(t("collectors.common.original_text.media_url", value=media_url))
         parts.extend(
             [
                 "",
-                t("collectors.common.original_text.media_url", value=article.media_url),
+                *media_lines,
                 t("collectors.common.original_text.media_type", value=article.media_type),
             ]
         )
