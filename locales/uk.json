@@ -157,15 +157,15 @@
     "links": {
       "chat": {
         "label": "💬 Чат",
-        "url": ""
+        "url": "https://t.me/UAMarvelRivalsChat"
       },
       "submission": {
         "label": "🤖 Запропонувати новину",
-        "url": ""
+        "url": "https://t.me/MarvelRivalsUABot"
       },
       "discord": {
         "label": "🎧 Discord",
-        "url": ""
+        "url": "https://discord.gg/953cCRVD"
       }
     }
   },

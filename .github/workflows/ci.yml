@@ -1,0 +1,56 @@
+# Continuous integration for the Marvel Rivals UA submission bot.
+#
+# Runs on every push to main and every pull request targeting main; a new push
+# to the same ref cancels any in-flight run. The single `check` job:
+#   1. installs the dependency set (also proves requirements.txt resolves),
+#   2. byte-compiles every module and imports the entrypoint — the Python
+#      analogue of a build, catching syntax and import-time errors,
+#   3. lints with Ruff.
+#
+# The bot stores its data in a local SQLite file (DATABASE_PATH, default
+# bot.db), so CI needs no database service container — there is nothing to
+# provision. Postgres is intentionally not part of this pipeline.
+#
+# Ruff is pinned so lint results are reproducible; bump it deliberately.
+# Formatting (`ruff format --check`) is intentionally not enforced here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: build / lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff==0.15.15
+
+      - name: Build (byte-compile + import check)
+        run: |
+          python -m compileall -q .
+          python -c "import main"
+
+      - name: Lint
+        run: ruff check .

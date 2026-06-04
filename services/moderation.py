@@ -224,7 +224,7 @@ def _format_part_for_moderation(text: str, part: dict) -> str:
         text,
         source_url=str(part.get("source_url") or ""),
         allow_source_link=_is_official_source_part(part),
-        include_community_footer=_is_official_source_part(part),
+        include_community_footer=True,
     )
 
 

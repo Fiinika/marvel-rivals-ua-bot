@@ -195,10 +195,6 @@ GEMINI_MODEL=gemini-2.5-flash
 OFFICIAL_NEWS_URL=https://www.marvelrivals.com/news/
 NEWS_CHECK_INTERVAL_MINUTES=30
 ARTICLE_TIMEZONE=Europe/Kyiv
-ENABLE_COMMUNITY_FOOTER=true
-COMMUNITY_CHAT_URL=
-SUBMISSION_BOT_URL=
-DISCORD_URL=
 ```
 
 Optional:
@@ -221,9 +217,7 @@ If `DATABASE_PATH` is omitted, the bot creates `bot.db` in the project directory
 
 `ARTICLE_TIMEZONE` controls article date conversion for admin metadata and reliable in-article schedules. The default is `Europe/Kyiv`; public event/shop/patch/maintenance times are shown as Kyiv time with `за Києвом` wording when conversion is reliable.
 
-`ENABLE_COMMUNITY_FOOTER` controls whether official AI-generated news drafts include the community navigation footer. The default is `true` for this project. Set it to `false` to omit the footer from official AI news drafts. Manual user submissions do not get this footer automatically.
-
-`COMMUNITY_CHAT_URL`, `SUBMISSION_BOT_URL`, and `DISCORD_URL` make the footer items clickable. Leave any of them empty to keep that item as plain text. The bot validates that configured footer URLs use `http` or `https` before rendering Telegram HTML links.
+The community navigation footer is always appended to every published post. Its labels and URLs both live in `locales/uk.json` under `post_footer.links` — there is no environment variable for it. See [Official News Collector](#official-news-collector) for details.
 
 ## Run Locally
 
@@ -279,7 +273,7 @@ Official AI posts are styled as Telegram gaming-community updates, not article s
 
 The admin moderation preview keeps metadata separate from the publishable draft. For official news it shows the submission ID, source, article title, detected category, Kyiv article date when available, source URL, truncated draft preview, tags, status, and the normal approve/edit/reject buttons. It does not dump the full parsed article body into Telegram; full `original_text` remains stored in the database for context.
 
-The community navigation footer is optional and enabled by default through `ENABLE_COMMUNITY_FOOTER=true`. It is added only to official AI-generated news drafts, after the hashtags, and is shown in moderation so admins see the final publishable post:
+The community navigation footer is always added to every published post — official AI-generated news drafts (after the hashtags) and manual user submissions alike. It is shown in moderation so admins see the final publishable post:
 
 ```text
 #MarvelRivalsUA #Офіційно #Анонс
@@ -289,7 +283,7 @@ The community navigation footer is optional and enabled by default through `ENAB
 💬 Чат | 🤖 Запропонувати новину | 🎧 Discord
 ```
 
-Footer labels live in `locales/uk.json` under `post_footer`. Footer URLs come from `.env`: `COMMUNITY_CHAT_URL`, `SUBMISSION_BOT_URL`, and `DISCORD_URL`. If a URL is configured, that item is rendered as a safe Telegram HTML link; if a URL is empty or invalid, the item stays plain text. Admins can still edit the visible footer text while editing the draft before approval.
+Footer labels and URLs both live in `locales/uk.json` under `post_footer.links` (`chat`, `submission`, `discord`), each with a `label` and a `url`. If a `url` is set, that item is rendered as a safe Telegram HTML link; if a `url` is empty or invalid, the item stays plain text. The bot validates that footer URLs use `http` or `https` before rendering links. Admins can still edit the visible footer text while editing the draft before approval.
 
 Published, moderated, and edited text messages are sent with Telegram link previews disabled. This keeps hidden footer links and any body links from creating large embedded preview cards. Telegram sends use a 30 second request timeout and retry retryable network failures, flood-wait responses, `TimeoutError`, and `aiohttp.ClientOSError` up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
 
@@ -310,7 +304,7 @@ The current collector supports only the official Marvel Rivals news page. Reddit
 The moderation chat now keeps the publishable post content separate from the control panel:
 
 - The first message or messages are the current post parts without buttons.
-- When `ENABLE_COMMUNITY_FOOTER=true`, official AI news post part messages render the community footer with clickable Telegram HTML links, matching the publish preview. Manual submissions are not given this footer automatically.
+- Every post part message renders the community footer with clickable Telegram HTML links, matching the publish preview, for both official AI news and manual submissions.
 - The last message is the metadata/control message with `✅ Approve`, `✏️ Edit`, and `❌ Reject`.
 - After `✏️ Edit`, the bot shows buttons for every part, even when there is only one part.
 - Choosing a part copies that original message into a temporary draft message with `💾 Зберегти`.
