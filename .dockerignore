@@ -1,0 +1,31 @@
+# Keep the build context small and never bake secrets or local state into the
+# image. NOTE: prompts/*.md and locales/* are runtime assets — do not exclude
+# them (only the top-level README is dropped below).
+.git
+.github
+.gitignore
+.dockerignore
+README.md
+
+# Local environment / secrets / databases.
+.env
+.env.*
+*.db
+*.db-journal
+
+# Python caches and virtualenvs.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ci-probe-venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Deploy tooling and editor cruft (not needed inside the image).
+Dockerfile
+docker-compose*.yml
+scripts/
+.idea/
+.vscode/

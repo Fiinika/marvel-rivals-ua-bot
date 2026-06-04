@@ -1,0 +1,171 @@
+# Build the bot image, push it to GHCR, and roll it out on a Hetzner server.
+#
+# Flow: push to main -> build & push ghcr.io/<owner>/<repo>:sha-<commit> -> SSH
+# to the server, pull the pinned image, `docker compose up -d`, verify the bot
+# container stays up. The bot uses Telegram long polling: no inbound ports, no
+# domain, no Postgres — data lives in a SQLite file on the `botdata` volume.
+#
+# --- Required repository secrets -------------------------------------------
+#   HETZNER_HOST        server IP or hostname
+#   HETZNER_USER        SSH user (e.g. deploy or root)
+#   HETZNER_SSH_KEY     private SSH key (PEM, no passphrase) for that user
+#   BOT_TOKEN           Telegram bot token
+#   ADMIN_CHAT_ID       moderation chat id
+#   PUBLISH_CHAT_ID     publish channel/chat id
+#   ADMIN_USER_IDS      comma-separated Telegram admin user ids
+# --- Optional secrets (app has sane defaults; set only to override) --------
+#   GEMINI_API_KEY      enables the AI news collector/scheduler
+#   GEMINI_MODEL, OFFICIAL_NEWS_URL, NEWS_CHECK_INTERVAL_MINUTES,
+#   ARTICLE_TIMEZONE, SUBMISSION_COOLDOWN_SECONDS
+#   HETZNER_SSH_PORT    defaults to 22
+#   HETZNER_DEPLOY_DIR  defaults to /opt/marvel-rivals-ua-bot
+#   HETZNER_KNOWN_HOSTS the server's known_hosts line(s); if set, the host key
+#                       is pinned out-of-band instead of trust-on-first-use via
+#                       ssh-keyscan. Get it with: ssh-keyscan -H <host>
+# GITHUB_TOKEN is provided automatically; it pushes the image to GHCR and is
+# used (ephemerally) by the server to pull it during this run.
+#
+# Every non-empty value above is upserted into .env.prod on the server; keys
+# you do not set are left untouched, so you may instead manage .env.prod by
+# hand on the box and set only the SSH secrets here.
+#
+# --- One-time server setup -------------------------------------------------
+#   1. Install Docker Engine + the compose plugin.
+#   2. The deploy dir, .env.prod, and docker-compose.prod.yml are created and
+#      shipped automatically on each deploy — no manual file creation needed.
+#   3. If the GHCR package is private, ensure this repo's GITHUB_TOKEN may read
+#      it (Package settings -> Manage Actions access), or pull will 403.
+
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image reference
+        id: image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"            # GHCR requires a lowercase path
+          echo "name=ghcr.io/${repo}" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${repo}:sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Hetzner
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ship compose file & roll out over SSH
+        env:
+          SSH_HOST: ${{ secrets.HETZNER_HOST }}
+          SSH_USER: ${{ secrets.HETZNER_USER }}
+          SSH_PORT: ${{ secrets.HETZNER_SSH_PORT != '' && secrets.HETZNER_SSH_PORT || '22' }}
+          SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.HETZNER_KNOWN_HOSTS }}
+          DEPLOY_DIR: ${{ secrets.HETZNER_DEPLOY_DIR != '' && secrets.HETZNER_DEPLOY_DIR || '/opt/marvel-rivals-ua-bot' }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Bot runtime config -> .env.prod on the server (empty -> app default).
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          PUBLISH_CHAT_ID: ${{ secrets.PUBLISH_CHAT_ID }}
+          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
+          SUBMISSION_COOLDOWN_SECONDS: ${{ secrets.SUBMISSION_COOLDOWN_SECONDS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          OFFICIAL_NEWS_URL: ${{ secrets.OFFICIAL_NEWS_URL }}
+          NEWS_CHECK_INTERVAL_MINUTES: ${{ secrets.NEWS_CHECK_INTERVAL_MINUTES }}
+          ARTICLE_TIMEZONE: ${{ secrets.ARTICLE_TIMEZONE }}
+        run: |
+          set -euo pipefail
+
+          # Ephemeral key + host-key pinning for this run. Prefer an out-of-band
+          # pin (HETZNER_KNOWN_HOSTS); otherwise fall back to trust-on-first-use
+          # via ssh-keyscan. Either way, fail loudly if no key was obtained.
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          fi
+          if ! grep -q . ~/.ssh/known_hosts; then
+            echo "No host key for $SSH_HOST — set HETZNER_KNOWN_HOSTS or check connectivity/port." >&2
+            exit 1
+          fi
+          # ssh uses -p (lowercase), scp uses -P (uppercase) for port.
+          ssh_opts=(-i ~/.ssh/id_deploy -p "$SSH_PORT" -o StrictHostKeyChecking=yes)
+          scp_opts=(-i ~/.ssh/id_deploy -P "$SSH_PORT" -o StrictHostKeyChecking=yes)
+          target="$SSH_USER@$SSH_HOST"
+
+          # Ensure the deploy dir exists and ship the prod compose file.
+          ssh "${ssh_opts[@]}" "$target" "mkdir -p '$DEPLOY_DIR'"
+          scp "${scp_opts[@]}" docker-compose.prod.yml "$target:$DEPLOY_DIR/docker-compose.prod.yml"
+
+          # Stream config + the rollout script over stdin. Every value is shell-
+          # quoted with %q and travels through the pipe (never argv/ps), so
+          # tokens or URLs with special characters are handled safely.
+          { printf 'export BOT_IMAGE=%q\n'                   "$IMAGE";
+            printf 'export REGISTRY_USER=%q\n'               "$REGISTRY_USER";
+            printf 'export REGISTRY_TOKEN=%q\n'              "$REGISTRY_TOKEN";
+            printf 'export DEPLOY_DIR=%q\n'                  "$DEPLOY_DIR";
+            printf 'export BOT_TOKEN=%q\n'                   "$BOT_TOKEN";
+            printf 'export ADMIN_CHAT_ID=%q\n'               "$ADMIN_CHAT_ID";
+            printf 'export PUBLISH_CHAT_ID=%q\n'             "$PUBLISH_CHAT_ID";
+            printf 'export ADMIN_USER_IDS=%q\n'              "$ADMIN_USER_IDS";
+            printf 'export SUBMISSION_COOLDOWN_SECONDS=%q\n' "$SUBMISSION_COOLDOWN_SECONDS";
+            printf 'export GEMINI_API_KEY=%q\n'              "$GEMINI_API_KEY";
+            printf 'export GEMINI_MODEL=%q\n'                "$GEMINI_MODEL";
+            printf 'export OFFICIAL_NEWS_URL=%q\n'           "$OFFICIAL_NEWS_URL";
+            printf 'export NEWS_CHECK_INTERVAL_MINUTES=%q\n' "$NEWS_CHECK_INTERVAL_MINUTES";
+            printf 'export ARTICLE_TIMEZONE=%q\n'            "$ARTICLE_TIMEZONE";
+            cat scripts/deploy-remote.sh; } \
+            | ssh "${ssh_opts[@]}" "$target" bash -s

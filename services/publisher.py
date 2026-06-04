@@ -99,7 +99,7 @@ def _format_part_text(text: str, submission: dict[str, Any]) -> str:
         text,
         source_url=str(submission.get("source_url") or ""),
         allow_source_link=_is_official_source_submission(submission),
-        include_community_footer=_is_official_source_submission(submission),
+        include_community_footer=True,
     )
 
 
