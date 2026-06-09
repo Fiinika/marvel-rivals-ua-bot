@@ -29,6 +29,11 @@ class Config:
     discord_mod_log_channel_id: int | None = None
     discord_allowed_invites: frozenset[str] = frozenset()
     discord_guild_id: int | None = None
+    # Optional welcome system + channels referenced in the welcome message.
+    discord_welcome_channel_id: int | None = None
+    discord_rules_channel_id: int | None = None
+    discord_chat_channel_id: int | None = None
+    discord_lft_channel_id: int | None = None
 
 
 def load_config() -> Config:
@@ -54,6 +59,10 @@ def load_config() -> Config:
     discord_mod_log_channel_id = _optional_int_or_none("DISCORD_MOD_LOG_CHANNEL_ID")
     discord_allowed_invites = _parse_invite_allowlist("DISCORD_ALLOWED_INVITES")
     discord_guild_id = _optional_int_or_none("DISCORD_GUILD_ID")
+    discord_welcome_channel_id = _optional_int_or_none("DISCORD_WELCOME_CHANNEL_ID")
+    discord_rules_channel_id = _optional_int_or_none("DISCORD_RULES_CHANNEL_ID")
+    discord_chat_channel_id = _optional_int_or_none("DISCORD_CHAT_CHANNEL_ID")
+    discord_lft_channel_id = _optional_int_or_none("DISCORD_LFT_CHANNEL_ID")
 
     return Config(
         bot_token=bot_token,
@@ -72,6 +81,10 @@ def load_config() -> Config:
         discord_mod_log_channel_id=discord_mod_log_channel_id,
         discord_allowed_invites=discord_allowed_invites,
         discord_guild_id=discord_guild_id,
+        discord_welcome_channel_id=discord_welcome_channel_id,
+        discord_rules_channel_id=discord_rules_channel_id,
+        discord_chat_channel_id=discord_chat_channel_id,
+        discord_lft_channel_id=discord_lft_channel_id,
     )
 
 

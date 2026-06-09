@@ -14,7 +14,10 @@ moderation/utility features on our own community server:
   * suspicious / scam link filtering
   * a small, conservative bad-word filter
   * moderation logging to a configured channel
-  * slash commands: /clear, /timeout, /warn
+  * persistent warning history with configurable auto-actions
+  * a member /report flow and an optional welcome system for new members
+  * slash commands: /help, /clear, /timeout, /warn, /report, /warnings,
+    /clearwarnings
 
 ------------------------------------------------------------------------------
 DISCORD DEVELOPER PORTAL REMINDERS (one-time setup):
@@ -32,6 +35,11 @@ DISCORD DEVELOPER PORTAL REMINDERS (one-time setup):
 3. The bot does NOT need Administrator. Grant only:
    View Channels, Send Messages, Manage Messages, Read Message History,
    Moderate Members, Embed Links, Use Application Commands.
+
+4. The optional welcome system (DISCORD_WELCOME_CHANNEL_ID) needs the privileged
+   "SERVER MEMBERS INTENT" enabled in the Developer Portal. It is requested ONLY
+   when a welcome channel is configured, so leaving welcome off keeps the bot's
+   intents (and behaviour) exactly as they were before.
 ------------------------------------------------------------------------------
 """
 
@@ -44,6 +52,8 @@ import re
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+
+import aiosqlite
 
 from config import Config
 
@@ -77,6 +87,20 @@ SPAM_TIMEOUT_SECONDS = 60
 
 # Discord's hard maximum timeout is 28 days.
 MAX_TIMEOUT_MINUTES = 28 * 24 * 60  # 40320
+
+# Auto-actions after repeated /warn warnings (configurable; kept in code on
+# purpose, like the anti-spam thresholds above). Keys are the *active* warning
+# count that triggers the action; values are the timeout length in seconds.
+# The bot NEVER auto-bans or auto-kicks, and never auto-punishes staff (see
+# _is_staff). Each /warn adds exactly one warning, so an exact-count match fires
+# every threshold once.
+WARN_TIMEOUT_THRESHOLDS: dict[int, int] = {
+    3: 10 * 60,  # 3 warnings -> 10-minute timeout
+    5: 60 * 60,  # 5 warnings -> 1-hour timeout
+}
+# At this many warnings, post an urgent mod-log note asking moderators to review
+# manually. No automatic ban/kick is ever performed.
+WARN_ESCALATION_THRESHOLD = 7
 
 # Bad-word filter. The list itself lives in an external, easy-to-edit text file
 # (discord_badwords.txt next to this module) so it can be curated without
@@ -175,6 +199,106 @@ def _has_bad_word(content: str) -> bool:
     return _BAD_WORD_RE is not None and _BAD_WORD_RE.search(content) is not None
 
 
+def _is_staff(member: "discord.Member") -> bool:
+    """True for members the bot must never auto-punish (mods / admins / owner)."""
+    if discord is None or not isinstance(member, discord.Member):
+        return False
+    perms = member.guild_permissions
+    return perms.administrator or perms.manage_messages or perms.moderate_members
+
+
+def _format_warn_timestamp(raw: str) -> str:
+    """Render a stored ISO-8601 timestamp as a Discord <t:...> markup string.
+
+    Discord localises <t:epoch:f> to each viewer's timezone. Falls back to the
+    raw value if it cannot be parsed, so a bad row never breaks /warnings.
+    """
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return raw or "—"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return f"<t:{int(parsed.timestamp())}:f>"
+
+
+class _WarningStore:
+    """Persistent Discord warning history stored in the project's SQLite file.
+
+    Kept inside this module so the Discord feature stays self-contained and the
+    Telegram database layer (database.py) is untouched. It opens its own
+    short-lived aiosqlite connections (with a generous busy timeout) against the
+    SAME database file, in a dedicated ``discord_warnings`` table the Telegram
+    side never reads. Warning volume is low, so brief write contention is handled
+    by SQLite's busy timeout without changing the shared file's journal mode.
+    """
+
+    _CONNECT_TIMEOUT = 30.0
+
+    def __init__(self, db_path: str) -> None:
+        self._path = db_path
+
+    async def init(self) -> None:
+        async with aiosqlite.connect(self._path, timeout=self._CONNECT_TIMEOUT) as db:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS discord_warnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    moderator_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_discord_warnings_guild_user "
+                "ON discord_warnings (guild_id, user_id)"
+            )
+            await db.commit()
+
+    async def add(self, *, guild_id: int, user_id: int, moderator_id: int, reason: str) -> int:
+        """Insert a warning and return the active warning count for that member."""
+        created_at = dt.datetime.now(dt.timezone.utc).isoformat()
+        async with aiosqlite.connect(self._path, timeout=self._CONNECT_TIMEOUT) as db:
+            await db.execute(
+                "INSERT INTO discord_warnings "
+                "(guild_id, user_id, moderator_id, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                (guild_id, user_id, moderator_id, reason, created_at),
+            )
+            await db.commit()
+            async with db.execute(
+                "SELECT COUNT(*) FROM discord_warnings WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            ) as cur:
+                row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+    async def list(self, *, guild_id: int, user_id: int) -> "list[dict]":
+        async with aiosqlite.connect(self._path, timeout=self._CONNECT_TIMEOUT) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT moderator_id, reason, created_at FROM discord_warnings "
+                "WHERE guild_id = ? AND user_id = ? ORDER BY id ASC",
+                (guild_id, user_id),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {"moderator_id": r["moderator_id"], "reason": r["reason"], "created_at": r["created_at"]}
+            for r in rows
+        ]
+
+    async def clear(self, *, guild_id: int, user_id: int) -> int:
+        async with aiosqlite.connect(self._path, timeout=self._CONNECT_TIMEOUT) as db:
+            cur = await db.execute(
+                "DELETE FROM discord_warnings WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id),
+            )
+            await db.commit()
+            return cur.rowcount if cur.rowcount is not None else 0
+
+
 # --------------------------------------------------------------------------- #
 # Public entry point used by main.py
 # --------------------------------------------------------------------------- #
@@ -223,8 +347,9 @@ async def _run_bot(bot: "ModerationBot", token: str) -> None:
         logger.error("Discord login failed: the DISCORD_BOT_TOKEN is invalid. Telegram bot keeps running.")
     except discord.PrivilegedIntentsRequired:
         logger.error(
-            "Discord login failed: the MESSAGE CONTENT INTENT is not enabled for this bot. "
-            "Enable it in the Developer Portal (Bot -> Privileged Gateway Intents). "
+            "Discord login failed: a required privileged intent is not enabled for this bot. "
+            "Enable MESSAGE CONTENT INTENT (and, if you set DISCORD_WELCOME_CHANNEL_ID, also "
+            "SERVER MEMBERS INTENT) in the Developer Portal (Bot -> Privileged Gateway Intents). "
             "Telegram bot keeps running."
         )
     except Exception:
@@ -252,6 +377,11 @@ if discord is not None:
             # Privileged: required to read message content for the filters.
             # Must also be enabled in the Developer Portal (see module docstring).
             intents.message_content = True
+            # Server Members Intent is privileged and only needed for the welcome
+            # system. Request it ONLY when a welcome channel is configured, so the
+            # existing bot keeps working unchanged when welcome is disabled.
+            if config.discord_welcome_channel_id:
+                intents.members = True
             super().__init__(
                 command_prefix=commands.when_mentioned,  # we only use slash commands
                 intents=intents,
@@ -261,8 +391,16 @@ if discord is not None:
             # (channel_id, user_id) -> deque[monotonic timestamp]
             self._spam_tracker: dict[tuple[int, int], deque[float]] = defaultdict(deque)
             self._mod_log_warned = False
+            # Persistent warning history (same SQLite file, dedicated table).
+            self.warning_store = _WarningStore(config.database_path)
 
         async def setup_hook(self) -> None:
+            # Ensure the warnings table exists before any command can touch it.
+            # A failure here only disables warning history; the rest keeps working.
+            try:
+                await self.warning_store.init()
+            except Exception:
+                logger.exception("Failed to initialise the Discord warnings table; warning history disabled.")
             _register_commands(self)
             self.tree.on_error = self._on_app_command_error
             # Sync slash commands. A guild-scoped sync is instant; a global sync
@@ -288,6 +426,69 @@ if discord is not None:
                 getattr(user, "id", "?"),
                 len(self.guilds),
             )
+
+        # ----- welcome system ----- #
+
+        async def on_member_join(self, member: "discord.Member") -> None:
+            try:
+                await self._send_welcome(member)
+            except Exception:
+                logger.exception("Error while sending the Discord welcome message.")
+
+        async def _send_welcome(self, member: "discord.Member") -> None:
+            channel_id = self.mod_config.discord_welcome_channel_id
+            if not channel_id or member.bot:
+                return  # welcome disabled, or a bot joined
+
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    channel = None
+            if channel is None:
+                logger.warning("Welcome channel %s is missing or inaccessible.", channel_id)
+                return
+
+            perms = channel.permissions_for(channel.guild.me)
+            if not (perms.send_messages and perms.embed_links):
+                logger.warning("Missing 'Send Messages' / 'Embed Links' in welcome channel %s.", channel_id)
+                return
+
+            embed = discord.Embed(
+                title="Вітаємо в Marvel Rivals UA 🇺🇦",
+                description=(
+                    "Ознайомся з правилами, обери роль і приєднуйся до спілкування. Гарної гри!"
+                ),
+                colour=discord.Colour.blurple(),
+            )
+            links = self._welcome_channel_links()
+            if links:
+                embed.add_field(name="Корисні канали", value=links, inline=False)
+
+            try:
+                # Ping only the joining member; never @everyone or roles.
+                await channel.send(
+                    content=member.mention,
+                    embed=embed,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                )
+            except discord.HTTPException:
+                logger.exception("Failed to send the Discord welcome message.")
+
+        def _welcome_channel_links(self) -> str:
+            """Channel mentions for the welcome embed, only for IDs set in .env.
+
+            Uses <#id> markup (renders as a channel link, never pings). Channels
+            are never hardcoded — unset values are simply omitted.
+            """
+            cfg = self.mod_config
+            entries = (
+                ("📜 Правила", cfg.discord_rules_channel_id),
+                ("💬 Чат", cfg.discord_chat_channel_id),
+                ("🤝 Пошук команди", cfg.discord_lft_channel_id),
+            )
+            return "\n".join(f"{label}: <#{cid}>" for label, cid in entries if cid)
 
         # ----- message moderation ----- #
 
@@ -430,19 +631,18 @@ if discord is not None:
 
         # ----- mod log ----- #
 
-        async def send_mod_log(
-            self,
-            *,
-            action: str,
-            member: "discord.abc.User | discord.Member",
-            channel: "discord.abc.GuildChannel | discord.Thread | None",
-            reason: str,
-            preview: str | None = None,
-        ) -> None:
+        async def _get_log_channel(self) -> "discord.abc.Messageable | None":
+            """Resolve the configured mod-log channel, or warn once and return None.
+
+            Shared by every logging path (moderation actions, reports, auto-actions)
+            so channel resolution and permission checks live in one place.
+            """
             channel_id = self.mod_config.discord_mod_log_channel_id
             if not channel_id:
-                self._warn_mod_log_once("DISCORD_MOD_LOG_CHANNEL_ID is not set; Discord moderation actions are not logged to a channel.")
-                return
+                self._warn_mod_log_once(
+                    "DISCORD_MOD_LOG_CHANNEL_ID is not set; Discord moderation actions are not logged to a channel."
+                )
+                return None
 
             log_channel = self.get_channel(channel_id)
             if log_channel is None:
@@ -452,16 +652,35 @@ if discord is not None:
                     log_channel = None
             if log_channel is None:
                 self._warn_mod_log_once(f"Mod-log channel {channel_id} is missing or inaccessible.")
-                return
+                return None
 
-            me = log_channel.guild.me
-            perms = log_channel.permissions_for(me)
+            perms = log_channel.permissions_for(log_channel.guild.me)
             if not (perms.send_messages and perms.embed_links):
                 self._warn_mod_log_once(
                     f"Missing 'Send Messages' / 'Embed Links' in mod-log channel {channel_id}."
                 )
-                return
+                return None
+            return log_channel
 
+        async def _send_log_embed(self, embed: "discord.Embed") -> None:
+            log_channel = await self._get_log_channel()
+            if log_channel is None:
+                return
+            try:
+                # allowed_mentions=none so the log itself never pings anyone.
+                await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                logger.exception("Failed to send Discord mod-log message.")
+
+        async def send_mod_log(
+            self,
+            *,
+            action: str,
+            member: "discord.abc.User | discord.Member",
+            channel: "discord.abc.GuildChannel | discord.Thread | None",
+            reason: str,
+            preview: str | None = None,
+        ) -> None:
             embed = discord.Embed(
                 title=f"🛡️ {action}",
                 colour=discord.Colour.orange(),
@@ -478,12 +697,75 @@ if discord is not None:
                 safe = discord.utils.escape_markdown(preview)[:200]
                 if safe:
                     embed.add_field(name="Message preview", value=safe, inline=False)
+            await self._send_log_embed(embed)
 
-            try:
-                # allowed_mentions=none so the log itself never pings anyone.
-                await log_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-            except discord.HTTPException:
-                logger.exception("Failed to send Discord mod-log message.")
+        async def send_report_log(
+            self,
+            *,
+            reporter: "discord.abc.User | discord.Member",
+            reported: "discord.abc.User | discord.Member",
+            channel: "discord.abc.GuildChannel | discord.Thread | None",
+            reason: str,
+        ) -> None:
+            embed = discord.Embed(
+                title="🚩 Report",
+                colour=discord.Colour.red(),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.add_field(name="Reporter", value=f"{reporter.mention} (`{reporter.id}`)", inline=False)
+            embed.add_field(name="Reported member", value=f"{reported.mention} (`{reported.id}`)", inline=False)
+            embed.add_field(
+                name="Channel",
+                value=getattr(channel, "mention", str(channel)) if channel is not None else "—",
+                inline=True,
+            )
+            embed.add_field(name="Reason", value=(reason or "—")[:1024], inline=False)
+            await self._send_log_embed(embed)
+
+        async def _apply_warning_autoactions(
+            self,
+            *,
+            member: "discord.Member",
+            channel: "discord.abc.GuildChannel | discord.Thread | None",
+            count: int,
+        ) -> None:
+            """Auto-act on the active warning count. Never bans/kicks; never hits staff."""
+            if _is_staff(member):
+                return  # never auto-punish moderators / admins / the owner
+
+            timeout_seconds = WARN_TIMEOUT_THRESHOLDS.get(count)
+            if timeout_seconds:
+                minutes = timeout_seconds // 60
+                ok = await self._safe_timeout(member, timeout_seconds, f"Авто-дія: {count} попереджень")
+                if ok:
+                    await self.send_mod_log(
+                        action=f"Auto-timeout ({count} warnings)",
+                        member=member,
+                        channel=channel,
+                        reason=f"{minutes}-minute timeout after reaching {count} warnings",
+                    )
+                else:
+                    # Could not time out (missing permission / role hierarchy / owner).
+                    await self.send_mod_log(
+                        action="Auto-timeout skipped — please review manually",
+                        member=member,
+                        channel=channel,
+                        reason=(
+                            f"Reached {count} warnings (wanted a {minutes}-minute timeout) but I could not apply it "
+                            "— check my 'Moderate Members' permission and role position."
+                        ),
+                    )
+
+            if count == WARN_ESCALATION_THRESHOLD:
+                await self.send_mod_log(
+                    action="⚠️ Manual review needed",
+                    member=member,
+                    channel=channel,
+                    reason=(
+                        f"{member} reached {count} warnings. Please review manually — "
+                        "no automatic ban/kick is ever performed."
+                    ),
+                )
 
         def _warn_mod_log_once(self, message: str) -> None:
             if not self._mod_log_warned:
@@ -575,11 +857,40 @@ def _register_commands(bot: "ModerationBot") -> None:
         embed.add_field(
             name="/warn <учасник> <причина>",
             value=(
-                "Винести попередження учаснику. Дію записано в канал мод-логів і надіслано "
-                "учаснику в особисті повідомлення, якщо це можливо.\n"
+                "Винести попередження учаснику (зберігається в історію). Дію записано в канал "
+                "мод-логів і надіслано учаснику в особисті повідомлення, якщо це можливо.\n"
                 "Потрібен дозвіл: **Moderate Members** (Тайм-аут учасників)."
             ),
             inline=False,
+        )
+        embed.add_field(
+            name="/warnings <учасник>",
+            value=(
+                "Показати історію попереджень учасника.\n"
+                "Потрібен дозвіл: **Moderate Members** (Тайм-аут учасників)."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="/clearwarnings <учасник>",
+            value=(
+                "Очистити всі попередження учасника.\n"
+                "Потрібен дозвіл: **Moderate Members** (Тайм-аут учасників)."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="/report <учасник> <причина> — для всіх",
+            value=(
+                "Будь-який учасник може поскаржитися на іншого; скарга надходить у канал "
+                "мод-логів. Відповідь бачить лише той, хто скаржиться."
+            ),
+            inline=False,
+        )
+
+        warn_rules = ", ".join(
+            f"{count} → тайм-аут {secs // 60} хв"
+            for count, secs in sorted(WARN_TIMEOUT_THRESHOLDS.items())
         )
         embed.add_field(
             name="ℹ️ Автоматична модерація (працює без команд)",
@@ -589,10 +900,19 @@ def _register_commands(bot: "ModerationBot") -> None:
                 "• Фільтр запрошень Discord (окрім дозволених у білому списку).\n"
                 "• Фільтр підозрілих / шахрайських посилань.\n"
                 "• Фільтр заборонених слів.\n"
-                "Учасники з дозволом **Manage Messages** не підпадають під ці фільтри."
+                f"• Авто-дії за попередженнями: {warn_rules}, "
+                f"{WARN_ESCALATION_THRESHOLD} → сигнал модерації для ручного розгляду. "
+                "Бот ніколи не банить і не кікає автоматично; модераторів авто-дії не торкаються.\n"
+                "Учасники з дозволом **Manage Messages** не підпадають під фільтри контенту."
             ),
             inline=False,
         )
+        if bot.mod_config.discord_welcome_channel_id:
+            embed.add_field(
+                name="👋 Привітання нових учасників",
+                value="Увімкнено: нові учасники отримують вітальне повідомлення у вітальному каналі.",
+                inline=False,
+            )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="clear", description="Видалити кілька останніх повідомлень у цьому каналі.")
@@ -685,6 +1005,18 @@ def _register_commands(bot: "ModerationBot") -> None:
             )
             return
 
+        # Persist first so /warnings reflects it and auto-actions can count it.
+        active_count: int | None = None
+        try:
+            active_count = await bot.warning_store.add(
+                guild_id=interaction.guild.id,
+                user_id=user.id,
+                moderator_id=interaction.user.id,
+                reason=reason,
+            )
+        except Exception:
+            logger.exception("Failed to persist a Discord warning; continuing without history.")
+
         dm_sent = False
         try:
             await user.send(f"⚠️ Тобі винесли попередження на сервері **{interaction.guild.name}**: {reason}")
@@ -692,9 +1024,11 @@ def _register_commands(bot: "ModerationBot") -> None:
         except discord.HTTPException:
             dm_sent = False  # DMs closed or blocked; not an error.
 
+        total_note = f" Усього активних попереджень: {active_count}." if active_count is not None else ""
         await interaction.response.send_message(
             f"Винесено попередження {user.mention}."
-            + (" (повідомлення в особисті надіслано)" if dm_sent else " (не вдалося написати в особисті)"),
+            + (" (повідомлення в особисті надіслано)" if dm_sent else " (не вдалося написати в особисті)")
+            + total_note,
             ephemeral=True,
         )
         await bot.send_mod_log(
@@ -702,4 +1036,107 @@ def _register_commands(bot: "ModerationBot") -> None:
             member=user,
             channel=interaction.channel,
             reason=reason,
+        )
+        if active_count is not None:
+            await bot._apply_warning_autoactions(
+                member=user, channel=interaction.channel, count=active_count
+            )
+
+    @bot.tree.command(name="report", description="Поскаржитися модерації на учасника.")
+    @app_commands.describe(member="Учасник, на якого скаржишся.", reason="Що сталося / причина скарги.")
+    @app_commands.guild_only()
+    @app_commands.checks.cooldown(3, 60.0)  # light anti-abuse: 3 reports / minute per user
+    async def report(interaction: "discord.Interaction", member: "discord.Member", reason: str) -> None:
+        if member.id == interaction.user.id:
+            await interaction.response.send_message("Не можна поскаржитися на самого себе.", ephemeral=True)
+            return
+        if member.bot:
+            await interaction.response.send_message("Не можна поскаржитися на бота.", ephemeral=True)
+            return
+
+        await bot.send_report_log(
+            reporter=interaction.user,
+            reported=member,
+            channel=interaction.channel,
+            reason=reason,
+        )
+        await interaction.response.send_message("Дякуємо, репорт надіслано модерації.", ephemeral=True)
+
+    @bot.tree.command(name="warnings", description="Показати історію попереджень учасника.")
+    @app_commands.describe(member="Учасник, чиї попередження показати.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(moderate_members=True)
+    async def warnings(interaction: "discord.Interaction", member: "discord.Member") -> None:
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message(
+                "Тобі потрібен дозвіл **Moderate Members** (Тайм-аут учасників).", ephemeral=True
+            )
+            return
+
+        try:
+            records = await bot.warning_store.list(guild_id=interaction.guild.id, user_id=member.id)
+        except Exception:
+            logger.exception("Failed to read Discord warnings.")
+            await interaction.response.send_message("Не вдалося прочитати історію попереджень.", ephemeral=True)
+            return
+
+        if not records:
+            await interaction.response.send_message(
+                f"У {member.mention} немає активних попереджень.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"Попередження — {member.display_name}",
+            description=f"{member.mention} • усього активних: {len(records)}",
+            colour=discord.Colour.orange(),
+        )
+        # Embeds allow 25 fields; show the 20 most recent and note if truncated.
+        recent = records[-20:]
+        for position, record in enumerate(recent, start=len(records) - len(recent) + 1):
+            when = _format_warn_timestamp(record["created_at"])
+            moderator = f"<@{record['moderator_id']}>"
+            reason_text = (record["reason"] or "—")[:300]
+            embed.add_field(
+                name=f"#{position} • {when}",
+                value=f"Модератор: {moderator}\nПричина: {reason_text}",
+                inline=False,
+            )
+        if len(records) > len(recent):
+            embed.set_footer(text=f"Показано останні {len(recent)} із {len(records)}.")
+
+        await interaction.response.send_message(
+            embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+    @bot.tree.command(name="clearwarnings", description="Очистити всі попередження учасника.")
+    @app_commands.describe(member="Учасник, чиї попередження очистити.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(moderate_members=True)
+    async def clearwarnings(interaction: "discord.Interaction", member: "discord.Member") -> None:
+        if not interaction.user.guild_permissions.moderate_members:
+            await interaction.response.send_message(
+                "Тобі потрібен дозвіл **Moderate Members** (Тайм-аут учасників).", ephemeral=True
+            )
+            return
+
+        try:
+            removed = await bot.warning_store.clear(guild_id=interaction.guild.id, user_id=member.id)
+        except Exception:
+            logger.exception("Failed to clear Discord warnings.")
+            await interaction.response.send_message("Не вдалося очистити попередження.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"Очищено попереджень для {member.mention}: {removed}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        await bot.send_mod_log(
+            action="/clearwarnings",
+            member=member,
+            channel=interaction.channel,
+            reason=f"Cleared {removed} warning(s) by {interaction.user} ({interaction.user.id})",
         )

@@ -340,13 +340,19 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_MOD_LOG_CHANNEL_ID=123456789012345678
 DISCORD_ALLOWED_INVITES=
 DISCORD_GUILD_ID=
+DISCORD_WELCOME_CHANNEL_ID=
+DISCORD_RULES_CHANNEL_ID=
+DISCORD_CHAT_CHANNEL_ID=
+DISCORD_LFT_CHANNEL_ID=
 ```
 
 - `ENABLE_DISCORD_MODERATION` — anything other than `true` keeps the Discord bot off.
 - `DISCORD_BOT_TOKEN` — bot token from the Discord Developer Portal. Keep it secret; it is read only from the environment and never printed or logged.
-- `DISCORD_MOD_LOG_CHANNEL_ID` — channel where moderation actions are logged (enable Developer Mode, right-click the channel → Copy Channel ID). If it is missing or the bot cannot post there, the bot logs a single safe warning instead.
+- `DISCORD_MOD_LOG_CHANNEL_ID` — channel where moderation actions, reports, and warning auto-actions are logged (enable Developer Mode, right-click the channel → Copy Channel ID). If it is missing or the bot cannot post there, the bot logs a single safe warning instead.
 - `DISCORD_ALLOWED_INVITES` — optional, comma-separated invite codes or full invite URLs to allow. **Empty means block every Discord invite link.**
 - `DISCORD_GUILD_ID` — optional. When set, slash commands sync instantly to that server; otherwise a global sync is used, which can take up to ~1 hour to appear.
+- `DISCORD_WELCOME_CHANNEL_ID` — optional. When set, the bot greets each new member in that channel. **This requires the privileged "Server Members Intent" enabled in the Developer Portal.** Leave it empty to disable public welcomes; the bot then does not request the members intent at all, so the rest of the bot is unaffected.
+- `DISCORD_RULES_CHANNEL_ID`, `DISCORD_CHAT_CHANNEL_ID`, `DISCORD_LFT_CHANNEL_ID` — optional channel IDs shown as links in the welcome message. Each appears only when set; channels are never hardcoded.
 
 Misconfigured Discord values never raise a configuration error, so they cannot
 stop the Telegram bot from starting.
@@ -354,7 +360,8 @@ stop the Telegram bot from starting.
 ### Developer Portal setup (one-time)
 
 1. **Message Content Intent** — enable it under *Developer Portal → your app → Bot → Privileged Gateway Intents*. Without it the bot logs in but cannot read messages, so the filters cannot work. The bot detects this case and logs a clear hint.
-2. **Slash command scopes** — invite the bot with **both** the `bot` and `applications.commands` OAuth2 scopes, e.g. an invite URL containing `scope=bot%20applications.commands`. Without `applications.commands` the `/clear`, `/timeout`, and `/warn` commands will not appear.
+2. **Slash command scopes** — invite the bot with **both** the `bot` and `applications.commands` OAuth2 scopes, e.g. an invite URL containing `scope=bot%20applications.commands`. Without `applications.commands` the slash commands will not appear.
+3. **Server Members Intent** — only required if you enable the welcome system (`DISCORD_WELCOME_CHANNEL_ID`). Enable it in the same *Privileged Gateway Intents* section. The bot requests this intent only when a welcome channel is configured, so leaving welcome off needs no extra setup.
 
 ### Required Discord permissions (no Administrator)
 
@@ -386,12 +393,45 @@ filters.
 
 ### Slash commands
 
+All command descriptions and user-facing replies are in Ukrainian.
+
+- `/help` — show the full command list (visible to moderators only).
 - `/clear amount` — delete 1–100 recent messages in the current channel (requires Manage Messages).
 - `/timeout user minutes reason` — timeout a member for 1–40320 minutes / up to 28 days (requires Moderate Members).
-- `/warn user reason` — warn a member; logged to the mod-log channel and DM'd to the user when possible (requires Moderate Members).
+- `/warn user reason` — warn a member; stored in persistent history, logged to the mod-log channel, and DM'd to the user when possible (requires Moderate Members).
+- `/warnings user` — show a member's warning history (requires Moderate Members).
+- `/clearwarnings user` — clear a member's warning history (requires Moderate Members).
+- `/report member reason` — **available to any member**; sends a report to the mod-log channel. The reporter gets an ephemeral confirmation and a light per-user cooldown prevents spam.
 
-Each command re-checks permissions at runtime and reports problems privately
-(ephemeral) instead of failing loudly.
+Each moderator command re-checks permissions at runtime and reports problems
+privately (ephemeral) instead of failing loudly.
+
+### Warning history and auto-actions
+
+`/warn` records each warning in the project's SQLite database in a dedicated
+`discord_warnings` table (columns: `id`, `guild_id`, `user_id`, `moderator_id`,
+`reason`, `created_at`). The table is created automatically on startup; no
+migration step is needed and the Telegram side never touches it.
+
+Auto-actions trigger on the number of active warnings (thresholds are constants
+near the top of `discord_moderation.py`):
+
+- 3 warnings → 10-minute timeout
+- 5 warnings → 1-hour timeout
+- 7 warnings → an urgent mod-log note asking moderators to review manually
+
+The bot **never auto-bans or auto-kicks**, only times out when it has *Moderate
+Members* (logging a safe note to the mod-log if it cannot), and never
+auto-punishes members who themselves have moderator/admin permissions.
+
+### Welcome system (optional)
+
+When `DISCORD_WELCOME_CHANNEL_ID` is set, the bot greets each new member in that
+channel with a Ukrainian welcome embed, optionally linking the rules / chat /
+looking-for-team channels when their IDs are configured. It mentions only the
+joining member and never `@everyone`. This is the only feature that needs the
+privileged Server Members Intent, and it is requested only when the welcome
+channel is configured.
 
 ### Install and run
 
