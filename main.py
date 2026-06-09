@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher
 
 from config import Config, ConfigError, load_config
 from database import Database
+from discord_moderation import start_discord_moderation
 from handlers import admin, user
 from services.collectors.registry import run_all_collectors
 
@@ -29,6 +30,9 @@ async def run() -> None:
     logger.info("Submission cooldown: %s seconds", config.submission_cooldown_seconds)
 
     news_scheduler_task = _start_news_scheduler_if_enabled(bot, config, database)
+    # Optional, independent Discord moderation bot. Returns None when disabled or
+    # misconfigured; any Discord failure is contained and never stops Telegram.
+    discord_task = start_discord_moderation(config)
     try:
         await dispatcher.start_polling(
             bot,
@@ -37,10 +41,11 @@ async def run() -> None:
             allowed_updates=["message", "channel_post", "callback_query"],
         )
     finally:
-        if news_scheduler_task is not None:
-            news_scheduler_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await news_scheduler_task
+        for background_task in (news_scheduler_task, discord_task):
+            if background_task is not None:
+                background_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await background_task
         await bot.session.close()
 
 

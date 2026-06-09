@@ -23,6 +23,12 @@ class Config:
     official_news_url: str = "https://www.marvelrivals.com/news/"
     news_check_interval_minutes: int | None = 30
     article_timezone: str = "Europe/Kyiv"
+    # Discord moderation module (optional, fully independent from the Telegram flow).
+    enable_discord_moderation: bool = False
+    discord_bot_token: str | None = None
+    discord_mod_log_channel_id: int | None = None
+    discord_allowed_invites: frozenset[str] = frozenset()
+    discord_guild_id: int | None = None
 
 
 def load_config() -> Config:
@@ -41,6 +47,14 @@ def load_config() -> Config:
     news_check_interval_minutes = _optional_positive_int_or_none("NEWS_CHECK_INTERVAL_MINUTES", 30)
     article_timezone = os.getenv("ARTICLE_TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
 
+    # Discord values are parsed leniently: a misconfigured Discord setting must never
+    # raise ConfigError, because that would also stop the Telegram bot from starting.
+    enable_discord_moderation = _optional_bool("ENABLE_DISCORD_MODERATION", False)
+    discord_bot_token = os.getenv("DISCORD_BOT_TOKEN", "").strip() or None
+    discord_mod_log_channel_id = _optional_int_or_none("DISCORD_MOD_LOG_CHANNEL_ID")
+    discord_allowed_invites = _parse_invite_allowlist("DISCORD_ALLOWED_INVITES")
+    discord_guild_id = _optional_int_or_none("DISCORD_GUILD_ID")
+
     return Config(
         bot_token=bot_token,
         admin_chat_id=admin_chat_id,
@@ -53,6 +67,11 @@ def load_config() -> Config:
         official_news_url=official_news_url,
         news_check_interval_minutes=news_check_interval_minutes,
         article_timezone=article_timezone,
+        enable_discord_moderation=enable_discord_moderation,
+        discord_bot_token=discord_bot_token,
+        discord_mod_log_channel_id=discord_mod_log_channel_id,
+        discord_allowed_invites=discord_allowed_invites,
+        discord_guild_id=discord_guild_id,
     )
 
 
@@ -104,6 +123,49 @@ def _optional_positive_int_or_none(name: str, default: int | None) -> int | None
         return None
 
     return parsed
+
+
+_TRUE_VALUES = {"true", "1", "yes", "on"}
+
+
+def _optional_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in _TRUE_VALUES
+
+
+def _optional_int_or_none(name: str) -> int | None:
+    """Parse an optional integer, returning None when missing, empty, or invalid.
+
+    Used for Discord settings so a typo cannot crash the Telegram bot at startup.
+    """
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
+def _parse_invite_allowlist(name: str) -> frozenset[str]:
+    """Normalise DISCORD_ALLOWED_INVITES into a set of lowercase invite codes.
+
+    Accepts bare codes (``abc123``) or full URLs (``https://discord.gg/abc123``)
+    and keeps only the trailing code. An empty value means "block every invite".
+    """
+    raw = os.getenv(name, "")
+    codes: set[str] = set()
+    for part in raw.split(","):
+        token = part.strip().rstrip("/")
+        if not token:
+            continue
+        if "/" in token:
+            token = token.rsplit("/", 1)[-1]
+        if token:
+            codes.add(token.lower())
+    return frozenset(codes)
 
 
 def _parse_admin_user_ids(value: str) -> frozenset[int]:

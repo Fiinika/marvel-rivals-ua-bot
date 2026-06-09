@@ -39,6 +39,8 @@ The code is split into handlers and services so future sources can be added with
 main.py
 config.py
 database.py
+discord_moderation.py
+discord_badwords.txt
 keyboards.py
 handlers/
   user.py
@@ -312,6 +314,92 @@ The moderation chat now keeps the publishable post content separate from the con
 - In groups where admins cannot directly edit bot messages, sending a new text message while the draft is active updates the draft message; the admin still confirms with `💾 Зберегти`.
 - `➕ Нова частина` starts add-part mode. The next supported admin message is copied into the moderation chat as a new post part, and the metadata/control message is moved to the bottom again.
 - Approval publishes all saved parts in order.
+
+## Discord Moderation (Optional)
+
+The project can also run an optional Discord moderation bot for our own Marvel
+Rivals UA community server. It is **independent** from the Telegram flow and is
+**not** a news source — Discord is used only for moderation/utility because the
+official server does not expose Follow Channel access.
+
+Both bots run in the **same process**: `main.py` starts the Discord bot as a
+background asyncio task alongside the existing Telegram long-polling loop. There
+is still only one `asyncio.run()`. If the Discord bot is disabled, misconfigured,
+or fails to log in, it logs a safe message and the Telegram bot keeps running
+normally. Secrets are never logged.
+
+### Enable it
+
+The Discord module lives in [`discord_moderation.py`](discord_moderation.py) and
+uses `discord.py`. It starts only when `ENABLE_DISCORD_MODERATION=true`. Add to
+`.env`:
+
+```env
+ENABLE_DISCORD_MODERATION=true
+DISCORD_BOT_TOKEN=your_discord_bot_token
+DISCORD_MOD_LOG_CHANNEL_ID=123456789012345678
+DISCORD_ALLOWED_INVITES=
+DISCORD_GUILD_ID=
+```
+
+- `ENABLE_DISCORD_MODERATION` — anything other than `true` keeps the Discord bot off.
+- `DISCORD_BOT_TOKEN` — bot token from the Discord Developer Portal. Keep it secret; it is read only from the environment and never printed or logged.
+- `DISCORD_MOD_LOG_CHANNEL_ID` — channel where moderation actions are logged (enable Developer Mode, right-click the channel → Copy Channel ID). If it is missing or the bot cannot post there, the bot logs a single safe warning instead.
+- `DISCORD_ALLOWED_INVITES` — optional, comma-separated invite codes or full invite URLs to allow. **Empty means block every Discord invite link.**
+- `DISCORD_GUILD_ID` — optional. When set, slash commands sync instantly to that server; otherwise a global sync is used, which can take up to ~1 hour to appear.
+
+Misconfigured Discord values never raise a configuration error, so they cannot
+stop the Telegram bot from starting.
+
+### Developer Portal setup (one-time)
+
+1. **Message Content Intent** — enable it under *Developer Portal → your app → Bot → Privileged Gateway Intents*. Without it the bot logs in but cannot read messages, so the filters cannot work. The bot detects this case and logs a clear hint.
+2. **Slash command scopes** — invite the bot with **both** the `bot` and `applications.commands` OAuth2 scopes, e.g. an invite URL containing `scope=bot%20applications.commands`. Without `applications.commands` the `/clear`, `/timeout`, and `/warn` commands will not appear.
+
+### Required Discord permissions (no Administrator)
+
+Grant only these — the bot is designed to work without Administrator and degrades
+gracefully when a permission is missing:
+
+- View Channels
+- Send Messages
+- Manage Messages (delete flagged messages, `/clear`)
+- Read Message History
+- Moderate Members (timeouts, `/timeout`)
+- Embed Links (mod-log embeds)
+- Use Application Commands (slash commands)
+
+Double-check that the bot's role is **above** the roles of members it should be
+able to time out — Discord forbids timing out the server owner or anyone with an
+equal/higher role, regardless of permissions.
+
+### Moderation features
+
+- **Anti-spam** — tracks messages per user per channel; more than 5 messages in ~7 seconds deletes the triggering message (when the bot has Manage Messages), applies a 60-second timeout (when it has Moderate Members), and logs the action. Thresholds are constants near the top of `discord_moderation.py`.
+- **Invite filter** — detects `discord.gg/…`, `discord.com/invite/…`, and `discordapp.com/invite/…` and deletes them unless the code is in `DISCORD_ALLOWED_INVITES`.
+- **Suspicious link filter** — conservative patterns for fake-Nitro, Steam-gift scams, crypto/airdrop spam, phishing look-alike domains, and IP-logger/grabber links; generic URL shorteners are flagged only when paired with a scam keyword.
+- **Bad-word filter** — a deliberately tiny, configurable list kept in an external, easy-to-edit text file, [`discord_badwords.txt`](discord_badwords.txt) (one term per line, `#` comments allowed). It is matched with Unicode-aware word boundaries to avoid overblocking normal Ukrainian/Russian/English words. Add server-specific terms there and restart the bot; if the file is missing the bot falls back to a small built-in default.
+- **Mod logs** — every action is posted to `DISCORD_MOD_LOG_CHANNEL_ID` as an embed with the action, user mention + ID, channel, reason, a short safe message preview, and a timestamp. The log never pings anyone.
+
+Members who already have **Manage Messages** (mods/admins) bypass the content
+filters.
+
+### Slash commands
+
+- `/clear amount` — delete 1–100 recent messages in the current channel (requires Manage Messages).
+- `/timeout user minutes reason` — timeout a member for 1–40320 minutes / up to 28 days (requires Moderate Members).
+- `/warn user reason` — warn a member; logged to the mod-log channel and DM'd to the user when possible (requires Moderate Members).
+
+Each command re-checks permissions at runtime and reports problems privately
+(ephemeral) instead of failing loudly.
+
+### Install and run
+
+`discord.py` is listed in `requirements.txt`, so `pip install -r requirements.txt`
+installs it. Run the project exactly as before with `python main.py` — when
+`ENABLE_DISCORD_MODERATION=true` and a valid token is present, the Discord bot
+starts automatically next to the Telegram bot. To run Telegram only, set
+`ENABLE_DISCORD_MODERATION=false` (or leave the token empty).
 
 ## Current Limitations
 
