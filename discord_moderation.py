@@ -607,7 +607,6 @@ if discord is not None:
             timeout_seconds: int,
         ) -> None:
             channel = message.channel
-            guild = message.guild
             deleted = await self._safe_delete(message)
 
             if timeout_seconds > 0 and isinstance(message.author, discord.Member):
