@@ -341,7 +341,6 @@ DISCORD_MOD_LOG_CHANNEL_ID=123456789012345678
 DISCORD_ALLOWED_INVITES=
 DISCORD_GUILD_ID=
 DISCORD_WELCOME_CHANNEL_ID=
-DISCORD_RULES_CHANNEL_ID=
 DISCORD_CHAT_CHANNEL_ID=
 DISCORD_LFT_CHANNEL_ID=
 ```
@@ -352,7 +351,7 @@ DISCORD_LFT_CHANNEL_ID=
 - `DISCORD_ALLOWED_INVITES` — optional, comma-separated invite codes or full invite URLs to allow. **Empty means block every Discord invite link.**
 - `DISCORD_GUILD_ID` — optional. When set, slash commands sync instantly to that server; otherwise a global sync is used, which can take up to ~1 hour to appear.
 - `DISCORD_WELCOME_CHANNEL_ID` — optional. When set, the bot greets each new member in that channel. **This requires the privileged "Server Members Intent" enabled in the Developer Portal.** Leave it empty to disable public welcomes; the bot then does not request the members intent at all, so the rest of the bot is unaffected.
-- `DISCORD_RULES_CHANNEL_ID`, `DISCORD_CHAT_CHANNEL_ID`, `DISCORD_LFT_CHANNEL_ID` — optional channel IDs shown as links in the welcome message. Each appears only when set; channels are never hardcoded.
+- `DISCORD_CHAT_CHANNEL_ID`, `DISCORD_LFT_CHANNEL_ID` — optional channel IDs shown as links in the welcome message. Each appears only when set; channels are never hardcoded. (Rules are shown inline from `discord_rules.txt`, not as a channel link.)
 
 Misconfigured Discord values never raise a configuration error, so they cannot
 stop the Telegram bot from starting.
@@ -402,6 +401,7 @@ All command descriptions and user-facing replies are in Ukrainian.
 - `/warnings user` — show a member's warning history (requires Moderate Members).
 - `/clearwarnings user` — clear a member's warning history (requires Moderate Members).
 - `/report member reason` — **available to any member**; sends a report to the mod-log channel. The reporter gets an ephemeral confirmation and a light per-user cooldown prevents spam.
+- `/lfthelp` — **available to any member**; shows an ephemeral guide for the looking-for-team forum (how to create a post, tags, post template). Links the forum when `DISCORD_LFT_CHANNEL_ID` is set. The forum itself can be (re)configured with `python scripts/setup_lft_forum.py` (needs Manage Channels + Manage Threads on the forum channel).
 
 Each moderator command re-checks permissions at runtime and reports problems
 privately (ephemeral) instead of failing loudly.
@@ -427,11 +427,12 @@ auto-punishes members who themselves have moderator/admin permissions.
 ### Welcome system (optional)
 
 When `DISCORD_WELCOME_CHANNEL_ID` is set, the bot greets each new member in that
-channel with a Ukrainian welcome embed, optionally linking the rules / chat /
-looking-for-team channels when their IDs are configured. It mentions only the
-joining member and never `@everyone`. This is the only feature that needs the
-privileged Server Members Intent, and it is requested only when the welcome
-channel is configured.
+channel with a Ukrainian welcome embed. The embed shows a short rules list read
+from the editable `discord_rules.txt` (one rule per line; `#` comments allowed;
+omitted if the file is missing/empty) and, optionally, chat / looking-for-team
+channel links when those IDs are configured. It mentions only the joining member
+and never `@everyone`. This is the only feature that needs the privileged Server
+Members Intent, and it is requested only when the welcome channel is configured.
 
 ### Install and run
 

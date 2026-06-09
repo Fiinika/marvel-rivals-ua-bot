@@ -17,7 +17,7 @@ moderation/utility features on our own community server:
   * persistent warning history with configurable auto-actions
   * a member /report flow and an optional welcome system for new members
   * slash commands: /help, /clear, /timeout, /warn, /report, /warnings,
-    /clearwarnings
+    /clearwarnings, /lfthelp (LFT-forum guide for everyone)
 
 ------------------------------------------------------------------------------
 DISCORD DEVELOPER PORTAL REMINDERS (one-time setup):
@@ -136,6 +136,30 @@ def _load_bad_words() -> tuple[str, ...]:
 
 
 BAD_WORDS: tuple[str, ...] = _load_bad_words()
+
+# Welcome rules. Like the bad-word list, the text lives in an external,
+# easy-to-edit file (discord_rules.txt) so the community rules shown in the
+# welcome message can be curated without touching Python. One rule per line;
+# blank lines and lines starting with "#" are ignored. If the file is missing or
+# empty, the welcome simply omits the rules section.
+_WELCOME_RULES_FILE = Path(__file__).resolve().parent / "discord_rules.txt"
+
+
+def _load_welcome_rules() -> tuple[str, ...]:
+    try:
+        raw = _WELCOME_RULES_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return ()
+    rules: list[str] = []
+    for line in raw.splitlines():
+        token = line.strip()
+        if not token or token.startswith("#"):
+            continue
+        rules.append(token)
+    return tuple(rules)
+
+
+WELCOME_RULES: tuple[str, ...] = _load_welcome_rules()
 
 # Detect Discord invite links: discord.gg/<code>, discord.com/invite/<code>,
 # discordapp.com/invite/<code> (with or without scheme / www).
@@ -462,6 +486,9 @@ if discord is not None:
                 ),
                 colour=discord.Colour.blurple(),
             )
+            if WELCOME_RULES:
+                rules_text = "\n".join(f"{index}. {rule}" for index, rule in enumerate(WELCOME_RULES, start=1))
+                embed.add_field(name="📜 Правила", value=rules_text[:1024], inline=False)
             links = self._welcome_channel_links()
             if links:
                 embed.add_field(name="Корисні канали", value=links, inline=False)
@@ -480,11 +507,11 @@ if discord is not None:
             """Channel mentions for the welcome embed, only for IDs set in .env.
 
             Uses <#id> markup (renders as a channel link, never pings). Channels
-            are never hardcoded — unset values are simply omitted.
+            are never hardcoded — unset values are simply omitted. Rules are shown
+            inline (see WELCOME_RULES / discord_rules.txt), not as a channel link.
             """
             cfg = self.mod_config
             entries = (
-                ("📜 Правила", cfg.discord_rules_channel_id),
                 ("💬 Чат", cfg.discord_chat_channel_id),
                 ("🤝 Пошук команди", cfg.discord_lft_channel_id),
             )
@@ -887,6 +914,14 @@ def _register_commands(bot: "ModerationBot") -> None:
             ),
             inline=False,
         )
+        embed.add_field(
+            name="/lfthelp — для всіх",
+            value=(
+                "Показати інструкцію та шаблон поста для форуму пошуку тіммейтів. "
+                "Відповідь бачить лише той, хто викликав команду."
+            ),
+            inline=False,
+        )
 
         warn_rules = ", ".join(
             f"{count} → тайм-аут {secs // 60} хв"
@@ -1061,6 +1096,53 @@ def _register_commands(bot: "ModerationBot") -> None:
             reason=reason,
         )
         await interaction.response.send_message("Дякуємо, репорт надіслано модерації.", ephemeral=True)
+
+    @bot.tree.command(
+        name="lfthelp",
+        description="Як знайти тіммейтів у Marvel Rivals: інструкція та шаблон поста.",
+    )
+    @app_commands.guild_only()
+    async def lfthelp(interaction: "discord.Interaction") -> None:
+        # Available to everyone; the reply is ephemeral so it never spams a channel.
+        lft_channel_id = bot.mod_config.discord_lft_channel_id
+        forum_ref = f"<#{lft_channel_id}>" if lft_channel_id else "форумі пошуку тіммейтів"
+        embed = discord.Embed(
+            title="🤝 Пошук тіммейтів — як це працює",
+            description=(
+                f"Шукай команду у {forum_ref} — один пост = один пошук.\n"
+                "1. Натисни **New Post / Новий пост**.\n"
+                "2. У назві коротко вкажи головне — режим, ранг, роль. "
+                "Напр.: `Ranked Diamond+, шукаю Strategist`.\n"
+                "3. Обери теги: платформу, режим і роль.\n"
+                "4. Скопіюй шаблон нижче у свій пост і заповни 👇"
+            ),
+            colour=discord.Colour.green(),
+        )
+        embed.add_field(
+            name="Шаблон поста",
+            value=(
+                "```\n"
+                "**Платформа:** PC / PlayStation / Xbox\n"
+                "**Режим:** Ranked / Casual / Quick Match\n"
+                "**Ранг:**\n"
+                "**Роль:** Vanguard (танк) / Duelist (дпс) / Strategist (сапорт)\n"
+                "**Час гри:** напр., 19:00–23:00 за Києвом\n"
+                "**Коментар:** вік, войс, кілька слів про себе\n"
+                "```"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Поради",
+            value=(
+                "• Один активний пост на людину. Знайшов команду — напиши про це в пості й закрий його 🔒\n"
+                "• Хочеш відгукнутися на чийсь пост? Просто напиши в ньому.\n"
+                "• Будь привітним — з токсиками грати ніхто не хоче 😉\n"
+                "• Бачиш порушення — скористайся командою `/report`."
+            ),
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="warnings", description="Показати історію попереджень учасника.")
     @app_commands.describe(member="Учасник, чиї попередження показати.")
