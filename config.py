@@ -34,6 +34,17 @@ class Config:
     discord_welcome_channel_id: int | None = None
     discord_chat_channel_id: int | None = None
     discord_lft_channel_id: int | None = None
+    # Telegram group-chat moderation module (optional, runs in the same process).
+    # Like the Discord block, every value is parsed leniently so a typo can never
+    # raise ConfigError and stop the bot from starting.
+    enable_telegram_moderation: bool = False
+    telegram_moderation_chat_ids: frozenset[int] = frozenset()
+    # Where moderation actions are logged. Falls back to admin_chat_id at use-time.
+    telegram_mod_log_chat_id: int | None = None
+    # Permitted t.me link codes/usernames (lowercased). Empty = block all t.me links.
+    telegram_link_allowlist: frozenset[str] = frozenset()
+    # Seconds before the welcome message auto-deletes. 0 disables auto-delete.
+    telegram_welcome_delete_seconds: int = 60
 
 
 def load_config() -> Config:
@@ -63,6 +74,16 @@ def load_config() -> Config:
     discord_chat_channel_id = _optional_int_or_none("DISCORD_CHAT_CHANNEL_ID")
     discord_lft_channel_id = _optional_int_or_none("DISCORD_LFT_CHANNEL_ID")
 
+    # Telegram moderation values are parsed leniently for the same reason as Discord:
+    # a misconfigured moderation setting must never stop the whole bot from starting.
+    enable_telegram_moderation = _optional_bool("ENABLE_TELEGRAM_MODERATION", False)
+    telegram_moderation_chat_ids = _parse_int_id_set("TELEGRAM_MODERATION_CHAT_IDS")
+    telegram_mod_log_chat_id = _optional_int_or_none("TELEGRAM_MOD_LOG_CHAT_ID")
+    # The link allowlist reuses the invite parser: it strips full URLs down to the
+    # trailing code and lowercases it, so "https://t.me/UAMarvelRivalsChat" -> "uamarvelrivalschat".
+    telegram_link_allowlist = _parse_invite_allowlist("TELEGRAM_LINK_ALLOWLIST")
+    telegram_welcome_delete_seconds = _optional_lenient_non_negative_int("TELEGRAM_WELCOME_DELETE_SECONDS", 60)
+
     return Config(
         bot_token=bot_token,
         admin_chat_id=admin_chat_id,
@@ -83,6 +104,11 @@ def load_config() -> Config:
         discord_welcome_channel_id=discord_welcome_channel_id,
         discord_chat_channel_id=discord_chat_channel_id,
         discord_lft_channel_id=discord_lft_channel_id,
+        enable_telegram_moderation=enable_telegram_moderation,
+        telegram_moderation_chat_ids=telegram_moderation_chat_ids,
+        telegram_mod_log_chat_id=telegram_mod_log_chat_id,
+        telegram_link_allowlist=telegram_link_allowlist,
+        telegram_welcome_delete_seconds=telegram_welcome_delete_seconds,
     )
 
 
@@ -158,6 +184,41 @@ def _optional_int_or_none(name: str) -> int | None:
         return int(value.strip())
     except ValueError:
         return None
+
+
+def _optional_lenient_non_negative_int(name: str, default: int) -> int:
+    """Parse an optional non-negative int, returning the default on missing/invalid.
+
+    Unlike _optional_non_negative_int, this never raises ConfigError — used for
+    Telegram moderation settings so a typo cannot stop the whole bot from starting.
+    """
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _parse_int_id_set(name: str) -> frozenset[int]:
+    """Parse a comma-separated list of chat IDs leniently into a frozenset[int].
+
+    Blank or non-integer entries are skipped rather than raising, so one bad value
+    in TELEGRAM_MODERATION_CHAT_IDS cannot stop the bot from starting.
+    """
+    raw = os.getenv(name, "")
+    ids: set[int] = set()
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            ids.add(int(token))
+        except ValueError:
+            continue
+    return frozenset(ids)
 
 
 def _parse_invite_allowlist(name: str) -> frozenset[str]:

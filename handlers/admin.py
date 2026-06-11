@@ -62,6 +62,18 @@ class AdminCommandChatFilter(BaseFilter):
         return message.chat.id == config.admin_chat_id or _chat_type(message) == "private"
 
 
+class AdminOrPrivateChatFilter(BaseFilter):
+    """Chat-scope-only gate: the admin chat or a private DM.
+
+    Used for /fetch_news so the bot never answers it in the public moderated
+    group — there the message falls through to the moderation router instead
+    (flood-counted and filtered like any other member message).
+    """
+
+    async def __call__(self, message: Message, config: Config) -> bool:
+        return message.chat.id == config.admin_chat_id or _chat_type(message) == "private"
+
+
 class AdminEditMessageFilter(BaseFilter):
     async def __call__(self, message: Message, config: Config, db: Database) -> bool:
         if message.from_user is None or message.from_user.id not in config.admin_user_ids:
@@ -145,7 +157,7 @@ async def moderation_part_callback(
         await _answer_callback(callback, t("admin.alert.unknown_action"), show_alert=True)
 
 
-@router.message(Command("fetch_news"))
+@router.message(AdminOrPrivateChatFilter(), Command("fetch_news"))
 async def fetch_news(message: Message, bot: Bot, config: Config, db: Database) -> None:
     if message.from_user is None or message.from_user.id not in config.admin_user_ids:
         await message.answer(t("admin.news_fetch.no_permission"))

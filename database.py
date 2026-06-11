@@ -142,6 +142,24 @@ class Database:
                 ON submission_tags (tag_id)
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_warnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    moderator_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_telegram_warnings_chat_user
+                ON telegram_warnings (chat_id, user_id)
+                """
+            )
             await db.commit()
 
     async def _ensure_column(
@@ -665,6 +683,55 @@ class Database:
             "DELETE FROM admin_edit_states WHERE admin_id = ?",
             (admin_id,),
         )
+
+    async def add_telegram_warning(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        moderator_id: int,
+        reason: str,
+    ) -> int:
+        """Insert a Telegram chat warning and return the active count for that member."""
+        now = utc_now()
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT INTO telegram_warnings (chat_id, user_id, moderator_id, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (chat_id, user_id, moderator_id, reason, now),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                "SELECT COUNT(*) AS total FROM telegram_warnings WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            row = await cursor.fetchone()
+            return int(row["total"]) if row else 0
+
+    async def list_telegram_warnings(self, *, chat_id: int, user_id: int) -> list[dict[str, Any]]:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT moderator_id, reason, created_at
+                FROM telegram_warnings
+                WHERE chat_id = ? AND user_id = ?
+                ORDER BY id ASC
+                """,
+                (chat_id, user_id),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def clear_telegram_warnings(self, *, chat_id: int, user_id: int) -> int:
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "DELETE FROM telegram_warnings WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            )
+            await db.commit()
+            return cursor.rowcount if cursor.rowcount is not None else 0
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:

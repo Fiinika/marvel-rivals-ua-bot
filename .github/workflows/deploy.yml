@@ -17,6 +17,12 @@
 #   GEMINI_API_KEY      enables the AI news collector/scheduler
 #   GEMINI_MODEL, OFFICIAL_NEWS_URL, NEWS_CHECK_INTERVAL_MINUTES,
 #   ARTICLE_TIMEZONE, SUBMISSION_COOLDOWN_SECONDS
+#   ENABLE_TELEGRAM_MODERATION       "true" enables group-chat moderation
+#   TELEGRAM_MODERATION_CHAT_IDS     comma-separated supergroup ids to moderate
+#   TELEGRAM_MOD_LOG_CHAT_ID         chat for moderation logs/reports
+#                                    (defaults to ADMIN_CHAT_ID)
+#   TELEGRAM_LINK_ALLOWLIST          allowed t.me links (empty = block all)
+#   TELEGRAM_WELCOME_DELETE_SECONDS  welcome auto-delete delay, default 60
 #   HETZNER_SSH_PORT    defaults to 22
 #   HETZNER_DEPLOY_DIR  defaults to /opt/marvel-rivals-ua-bot
 #   HETZNER_KNOWN_HOSTS the server's known_hosts line(s); if set, the host key
@@ -123,6 +129,11 @@ jobs:
           OFFICIAL_NEWS_URL: ${{ secrets.OFFICIAL_NEWS_URL }}
           NEWS_CHECK_INTERVAL_MINUTES: ${{ secrets.NEWS_CHECK_INTERVAL_MINUTES }}
           ARTICLE_TIMEZONE: ${{ secrets.ARTICLE_TIMEZONE }}
+          ENABLE_TELEGRAM_MODERATION: ${{ secrets.ENABLE_TELEGRAM_MODERATION }}
+          TELEGRAM_MODERATION_CHAT_IDS: ${{ secrets.TELEGRAM_MODERATION_CHAT_IDS }}
+          TELEGRAM_MOD_LOG_CHAT_ID: ${{ secrets.TELEGRAM_MOD_LOG_CHAT_ID }}
+          TELEGRAM_LINK_ALLOWLIST: ${{ secrets.TELEGRAM_LINK_ALLOWLIST }}
+          TELEGRAM_WELCOME_DELETE_SECONDS: ${{ secrets.TELEGRAM_WELCOME_DELETE_SECONDS }}
         run: |
           set -euo pipefail
 
@@ -167,5 +178,10 @@ jobs:
             printf 'export OFFICIAL_NEWS_URL=%q\n'           "$OFFICIAL_NEWS_URL";
             printf 'export NEWS_CHECK_INTERVAL_MINUTES=%q\n' "$NEWS_CHECK_INTERVAL_MINUTES";
             printf 'export ARTICLE_TIMEZONE=%q\n'            "$ARTICLE_TIMEZONE";
+            printf 'export ENABLE_TELEGRAM_MODERATION=%q\n'      "$ENABLE_TELEGRAM_MODERATION";
+            printf 'export TELEGRAM_MODERATION_CHAT_IDS=%q\n'    "$TELEGRAM_MODERATION_CHAT_IDS";
+            printf 'export TELEGRAM_MOD_LOG_CHAT_ID=%q\n'        "$TELEGRAM_MOD_LOG_CHAT_ID";
+            printf 'export TELEGRAM_LINK_ALLOWLIST=%q\n'         "$TELEGRAM_LINK_ALLOWLIST";
+            printf 'export TELEGRAM_WELCOME_DELETE_SECONDS=%q\n' "$TELEGRAM_WELCOME_DELETE_SECONDS";
             cat scripts/deploy-remote.sh; } \
             | ssh "${ssh_opts[@]}" "$target" bash -s

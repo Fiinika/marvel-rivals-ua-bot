@@ -442,6 +442,132 @@ installs it. Run the project exactly as before with `python main.py` — when
 starts automatically next to the Telegram bot. To run Telegram only, set
 `ENABLE_DISCORD_MODERATION=false` (or leave the token empty).
 
+## Telegram Chat Moderation (Optional)
+
+The same Telegram bot can also moderate community group chats (for example
+`t.me/UAMarvelRivalsChat`). It mirrors the Discord moderation feature set but uses
+the native Telegram API and runs in the **same process** as the news/submission
+flow — there is no second bot and still only one `asyncio.run()`. It is disabled
+by default and never affects the submission/news flows when off.
+
+The moderation logic lives in [`handlers/moderation.py`](handlers/moderation.py)
+(Telegram I/O) and [`services/chat_moderation.py`](services/chat_moderation.py)
+(pure rules), and warnings are stored in the project's SQLite file in a dedicated
+`telegram_warnings` table the rest of the bot never touches.
+
+### Enable it
+
+Add to `.env` (each value is parsed leniently, so a typo can never stop the bot):
+
+```env
+ENABLE_TELEGRAM_MODERATION=true
+TELEGRAM_MODERATION_CHAT_IDS=-1001234567890
+TELEGRAM_MOD_LOG_CHAT_ID=
+TELEGRAM_LINK_ALLOWLIST=
+TELEGRAM_WELCOME_DELETE_SECONDS=60
+```
+
+- `ENABLE_TELEGRAM_MODERATION` — anything other than `true` keeps moderation off.
+- `TELEGRAM_MODERATION_CHAT_IDS` — comma-separated chat IDs to moderate (supergroup
+  IDs look like `-1001234567890`). Only these chats are moderated; everything else
+  (the bot's DMs, admin chat, publish channel) is untouched. **Do not list
+  `ADMIN_CHAT_ID` or `PUBLISH_CHAT_ID` here.**
+- `TELEGRAM_MOD_LOG_CHAT_ID` — where moderation actions are logged. Defaults to
+  `ADMIN_CHAT_ID` when empty.
+- `TELEGRAM_LINK_ALLOWLIST` — comma-separated allowed `t.me` link codes/usernames
+  (bare code or full URL). **Empty means block every non-allowlisted `t.me`
+  invite/link** posted by non-moderators. List your own community links here.
+- `TELEGRAM_WELCOME_DELETE_SECONDS` — seconds before the welcome message
+  auto-deletes; `0` disables auto-delete.
+
+### Telegram setup (one-time)
+
+1. Each moderated chat must be a **supergroup** (Telegram only allows muting in
+   supergroups).
+2. Add the bot to the chat and **promote it to admin** with at least *Delete
+   Messages* and *Ban/Restrict Users*. An admin bot receives every message
+   regardless of the group's privacy mode, so the filters can see all content. If
+   the bot is not an admin in an allowlisted chat, it logs a clear warning and the
+   filters stay silent until it is promoted.
+
+### Moderation features
+
+- **Anti-flood** — more than 5 messages from the same user in ~7 seconds deletes
+  the triggering message and applies a short temporary mute (constants near the top
+  of `services/chat_moderation.py`). Stickers/media count toward the flood limit too.
+- **Telegram invite/link filter** — deletes `t.me/…`, `t.me/+…`, and
+  `t.me/joinchat/…` links to other chats unless the code is in
+  `TELEGRAM_LINK_ALLOWLIST`. Well-known non-invite paths (sticker packs, share
+  links, proxies) are ignored.
+- **Suspicious/scam link filter** — conservative patterns for free-Nitro/Premium,
+  gift-card and crypto-airdrop scams, pump groups, phishing look-alikes, and
+  IP-logger links; generic shorteners are flagged only with a scam keyword.
+- **Bad-word filter** — a tiny, editable list in
+  [`telegram_badwords.txt`](telegram_badwords.txt) (one term per line, `#`
+  comments allowed), matched with Unicode-aware word boundaries so it never flags
+  substrings of normal words.
+- **Edited messages** are re-checked for the content filters above (a benign
+  message edited to add a scam link is caught), but edits do not count toward
+  anti-flood.
+- **Warnings + auto-actions** — `/warn` stores warnings in `telegram_warnings`;
+  3 warnings → 10-minute mute, 5 → 1-hour mute, 7 → an urgent mod-log note for
+  manual review. The bot **never auto-bans or auto-kicks** and never auto-punishes
+  moderators.
+- **Mod log** — every action is posted to `TELEGRAM_MOD_LOG_CHAT_ID` (or the admin
+  chat) with the action, user, moderator, reason, and a short message preview.
+- **One-tap log actions** — report entries carry inline 🗑 Delete / 🔇 Mute (1h) /
+  ⛔ Ban buttons (auto-filter entries get Mute/Ban; Delete appears only if the
+  offending message still exists). Only moderators of the target chat can use
+  them; the outcome and who clicked are appended to the log entry.
+- **Welcome** — new members get a Ukrainian welcome with a short rules list read
+  from the editable [`telegram_rules.txt`](telegram_rules.txt); it auto-deletes
+  after `TELEGRAM_WELCOME_DELETE_SECONDS` to avoid clutter.
+- **Service-message cleanup** — the "X joined" / "X left" service messages are
+  deleted automatically to keep the chat clean.
+
+Chat administrators (and the bot's configured `ADMIN_USER_IDS`) bypass the content
+filters and are protected from auto-actions; anonymous-admin and linked-channel
+posts are never moderated. All destructive actions degrade gracefully when the bot
+lacks a permission — they log a one-time warning and keep the bot polling.
+
+### Commands
+
+All command replies are Ukrainian. Available to chat admins / `ADMIN_USER_IDS`:
+
+- `/modhelp` — show the command list and the active auto-moderation summary.
+- `/del` — delete the replied-to message.
+- `/mute [duration] [reason]` — mute a member (reply or numeric ID). Duration like
+  `30` (minutes), `2h`, `1d`; no duration defaults to 60 minutes; `0` mutes
+  permanently. Everything after the duration is stored as the reason.
+- `/unmute` — lift a mute (restores the chat's default permissions).
+- `/ban [duration] [reason]` — ban a member; no duration means a permanent ban.
+- `/unban` — unban a member (by numeric ID or by replying to one of their messages).
+- `/kick` — remove a member without a lasting ban (they can rejoin via an invite link).
+- `/warn [reason]` — warn a member; stored in history, logged, and DM'd to the
+  member when possible.
+- `/warnings` — show a member's warning history.
+- `/clearwarnings` — clear a member's warnings.
+
+Available to **every member** of a moderated chat:
+
+- `/report [reason]` — report the replied-to message to the moderators. The report
+  goes to the mod-log chat with the reporter, the reported member, an optional
+  reason, a short preview, and a deep link to the message. The `/report` message
+  and the confirmation auto-delete shortly after, and a light per-user cooldown
+  (3 reports per minute) prevents abuse. Self-reports and reports against bots
+  are rejected.
+- `/rules` — show the chat rules from `telegram_rules.txt`; the reply (and the
+  command) auto-delete after `TELEGRAM_WELCOME_DELETE_SECONDS`.
+
+Targets are chosen by replying to a message or by passing a numeric user ID.
+
+### Install and run
+
+aiogram already powers the bot, so no new dependency is needed — run `python main.py`
+as before. When `ENABLE_TELEGRAM_MODERATION=true` and at least one chat ID is set,
+the moderation router is registered alongside the existing routers; otherwise the
+bot behaves exactly as before.
+
 ## Current Limitations
 
 - Polling mode only, no webhook setup.

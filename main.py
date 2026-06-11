@@ -5,12 +5,22 @@ from contextlib import suppress
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeChat,
+    BotCommandScopeChatAdministrators,
+    BotCommandScopeDefault,
+)
 
 from config import Config, ConfigError, load_config
 from database import Database
 from discord_moderation import start_discord_moderation
-from handlers import admin, user
+from handlers import admin, moderation, user
 from services.collectors.registry import run_all_collectors
+from services.i18n import t
 
 
 logger = logging.getLogger(__name__)
@@ -23,11 +33,24 @@ async def run() -> None:
 
     bot = Bot(token=config.bot_token)
     dispatcher = Dispatcher()
-    dispatcher.include_routers(admin.router, user.router)
+    # Order matters: admin (admin-chat/private) first, then the optional moderation
+    # router (scoped to the allowlisted group chats), then the private-only user
+    # submission router. The moderation router is only registered when enabled and
+    # at least one chat id is configured, so behaviour is unchanged when off.
+    routers = [admin.router]
+    if config.enable_telegram_moderation and config.telegram_moderation_chat_ids:
+        routers.append(moderation.router)
+        logger.info("Telegram chat moderation enabled for chats: %s", sorted(config.telegram_moderation_chat_ids))
+    else:
+        logger.info("Telegram chat moderation is disabled.")
+    routers.append(user.router)
+    dispatcher.include_routers(*routers)
 
     logger.info("Starting Marvel Rivals UA submission bot")
     logger.info("Admin chat: %s, publish chat: %s", config.admin_chat_id, config.publish_chat_id)
     logger.info("Submission cooldown: %s seconds", config.submission_cooldown_seconds)
+
+    await _configure_bot_commands(bot, config)
 
     news_scheduler_task = _start_news_scheduler_if_enabled(bot, config, database)
     # Optional, independent Discord moderation bot. Returns None when disabled or
@@ -38,7 +61,7 @@ async def run() -> None:
             bot,
             config=config,
             db=database,
-            allowed_updates=["message", "channel_post", "callback_query"],
+            allowed_updates=["message", "edited_message", "channel_post", "callback_query"],
         )
     finally:
         for background_task in (news_scheduler_task, discord_task):
@@ -47,6 +70,105 @@ async def run() -> None:
                 with suppress(asyncio.CancelledError):
                     await background_task
         await bot.session.close()
+
+
+_COMMAND_MENU_ATTEMPTS = 3
+_COMMAND_MENU_RETRY_DELAY_SECONDS = 5
+
+
+async def _configure_bot_commands(bot: Bot, config: Config) -> None:
+    """Scope the command menu so the submission hint never shows in group chats.
+
+    Retries a few times: a transient network blip right at startup would
+    otherwise leave the menu unconfigured until the next restart. Any persistent
+    failure is logged and never stops the bot.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, _COMMAND_MENU_ATTEMPTS + 1):
+        try:
+            await _apply_command_menu(bot, config)
+            return
+        except TelegramAPIError as exc:
+            last_error = exc
+            if attempt < _COMMAND_MENU_ATTEMPTS:
+                logger.info(
+                    "Configuring the bot command menu failed (attempt %s/%s); retrying in %s s.",
+                    attempt,
+                    _COMMAND_MENU_ATTEMPTS,
+                    _COMMAND_MENU_RETRY_DELAY_SECONDS,
+                )
+                await asyncio.sleep(_COMMAND_MENU_RETRY_DELAY_SECONDS)
+    logger.warning(
+        "Could not configure the bot command menu (%s). The previous menu, stored "
+        "server-side by Telegram, stays in effect.",
+        last_error.__class__.__name__ if last_error is not None else "unknown error",
+    )
+
+
+async def _apply_command_menu(bot: Bot, config: Config) -> None:
+    """One attempt at applying the scoped command menu.
+
+    A default-scope command list (e.g. set once via BotFather) is shown in EVERY
+    chat, including the moderated public group. Instead: private chats get /start,
+    the default and group scopes are cleared, and each moderated chat additionally
+    shows the moderation commands to its administrators only.
+    """
+    await bot.set_my_commands(
+        [BotCommand(command="start", description=t("commands.start"))],
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+    # Clear the default scope so group chats inherit no command menu at all.
+    await bot.delete_my_commands(scope=BotCommandScopeDefault())
+    await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+    logger.info("Bot command menu configured: /start in private chats only.")
+
+    if not (config.enable_telegram_moderation and config.telegram_moderation_chat_ids):
+        # Per-chat command menus persist server-side across restarts. When the
+        # listed chats are no longer moderated, clear their menus so members do
+        # not keep seeing dead /report and /rules entries.
+        for chat_id in sorted(config.telegram_moderation_chat_ids):
+            try:
+                await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
+                await bot.delete_my_commands(scope=BotCommandScopeChatAdministrators(chat_id=chat_id))
+            except TelegramAPIError:
+                logger.info("Could not clear the command menu for chat %s", chat_id)
+        return
+
+    # Ordinary members of a moderated chat see /report and /rules; its administrators
+    # see the full moderation list (the admins scope fully overrides the chat scope).
+    member_commands = [
+        BotCommand(command=name, description=t(f"commands.{name}"))
+        for name in ("report", "rules")
+    ]
+    moderator_commands = [
+        BotCommand(command=name, description=t(f"commands.{name}"))
+        for name in (
+            "modhelp",
+            "del",
+            "mute",
+            "unmute",
+            "ban",
+            "unban",
+            "kick",
+            "warn",
+            "warnings",
+            "clearwarnings",
+            "report",
+            "rules",
+        )
+    ]
+    for chat_id in sorted(config.telegram_moderation_chat_ids):
+        try:
+            await bot.set_my_commands(member_commands, scope=BotCommandScopeChat(chat_id=chat_id))
+            await bot.set_my_commands(
+                moderator_commands,
+                scope=BotCommandScopeChatAdministrators(chat_id=chat_id),
+            )
+        except TelegramAPIError:
+            logger.info(
+                "Could not set moderator commands for chat %s (is the bot a member there?)",
+                chat_id,
+            )
 
 
 def _start_news_scheduler_if_enabled(bot: Bot, config: Config, db: Database) -> asyncio.Task | None:

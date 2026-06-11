@@ -1,2 +1,2 @@
-"""aiogram routers for user submissions and admin moderation."""
+"""aiogram routers: user submissions, admin moderation, and Telegram chat moderation."""
 

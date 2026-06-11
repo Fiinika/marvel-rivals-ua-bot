@@ -22,7 +22,13 @@ URL_PATTERN = re.compile(r"https?://|www\.", re.IGNORECASE)
 
 class SubmissionChatFilter(BaseFilter):
     async def __call__(self, message: Message, config: Config) -> bool:
-        return message.chat.id != config.admin_chat_id
+        # Submissions come from private DMs only. This keeps the bot from treating
+        # ordinary messages in the public/moderated group (where it now also runs
+        # moderation) as news submissions. Moderated chats are excluded explicitly
+        # too, as defence in depth.
+        if _chat_type(message) != "private":
+            return False
+        return message.chat.id not in config.telegram_moderation_chat_ids
 
 
 @router.message(SubmissionChatFilter(), CommandStart())
@@ -157,6 +163,11 @@ async def _create_and_send_submission(
         return
 
     await message.answer(t("user.thank_you"))
+
+
+def _chat_type(message: Message) -> str:
+    chat_type = message.chat.type
+    return getattr(chat_type, "value", chat_type)
 
 
 def _contains_link(message: Message) -> bool:

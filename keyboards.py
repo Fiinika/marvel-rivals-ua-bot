@@ -23,6 +23,15 @@ class CollectorCallback(CallbackData, prefix="collector"):
     collector_id: str
 
 
+class ModLogActionCallback(CallbackData, prefix="modact"):
+    """Inline moderation action on a mod-log entry (Telegram chat moderation)."""
+
+    action: str  # "del" | "mute" | "ban"
+    chat_id: int  # the moderated chat the offence happened in
+    user_id: int  # the offending member
+    message_id: int  # offending message to delete; 0 when it is already gone
+
+
 def moderation_keyboard(submission_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(
@@ -92,6 +101,33 @@ def save_draft_keyboard(submission_id: int, part_index: int):
             ]
         ]
     )
+
+
+def mod_log_action_keyboard(chat_id: int, user_id: int, message_id: int = 0):
+    """Inline actions under a mod-log entry: delete / mute / ban the offender.
+
+    The delete button is included only when a message_id is known (e.g. a reported
+    message that still exists); auto-filter entries pass 0 because the offending
+    message has already been removed.
+    """
+    builder = InlineKeyboardBuilder()
+    if message_id:
+        builder.button(
+            text=t("buttons.modlog_delete"),
+            callback_data=ModLogActionCallback(
+                action="del", chat_id=chat_id, user_id=user_id, message_id=message_id
+            ),
+        )
+    builder.button(
+        text=t("buttons.modlog_mute"),
+        callback_data=ModLogActionCallback(action="mute", chat_id=chat_id, user_id=user_id, message_id=0),
+    )
+    builder.button(
+        text=t("buttons.modlog_ban"),
+        callback_data=ModLogActionCallback(action="ban", chat_id=chat_id, user_id=user_id, message_id=0),
+    )
+    builder.adjust(3)
+    return builder.as_markup()
 
 
 def collector_source_keyboard(collectors: list[CollectorDefinition]):
