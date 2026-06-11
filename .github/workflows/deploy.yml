@@ -23,6 +23,10 @@
 #                                    (defaults to ADMIN_CHAT_ID)
 #   TELEGRAM_LINK_ALLOWLIST          allowed t.me links (empty = block all)
 #   TELEGRAM_WELCOME_DELETE_SECONDS  welcome auto-delete delay, default 60
+#   ENABLE_DATABASE_BACKUP           "false" disables the nightly DB snapshot
+#                                    written to /data/backups (default on)
+#   DATABASE_BACKUP_HOUR             local hour (0-23) of the backup, default 4
+#   DATABASE_BACKUP_KEEP             how many snapshots to keep, default 14
 #   HETZNER_SSH_PORT    defaults to 22
 #   HETZNER_DEPLOY_DIR  defaults to /opt/marvel-rivals-ua-bot
 #   HETZNER_KNOWN_HOSTS the server's known_hosts line(s); if set, the host key
@@ -134,6 +138,9 @@ jobs:
           TELEGRAM_MOD_LOG_CHAT_ID: ${{ secrets.TELEGRAM_MOD_LOG_CHAT_ID }}
           TELEGRAM_LINK_ALLOWLIST: ${{ secrets.TELEGRAM_LINK_ALLOWLIST }}
           TELEGRAM_WELCOME_DELETE_SECONDS: ${{ secrets.TELEGRAM_WELCOME_DELETE_SECONDS }}
+          ENABLE_DATABASE_BACKUP: ${{ secrets.ENABLE_DATABASE_BACKUP }}
+          DATABASE_BACKUP_HOUR: ${{ secrets.DATABASE_BACKUP_HOUR }}
+          DATABASE_BACKUP_KEEP: ${{ secrets.DATABASE_BACKUP_KEEP }}
         run: |
           set -euo pipefail
 
@@ -183,5 +190,8 @@ jobs:
             printf 'export TELEGRAM_MOD_LOG_CHAT_ID=%q\n'        "$TELEGRAM_MOD_LOG_CHAT_ID";
             printf 'export TELEGRAM_LINK_ALLOWLIST=%q\n'         "$TELEGRAM_LINK_ALLOWLIST";
             printf 'export TELEGRAM_WELCOME_DELETE_SECONDS=%q\n' "$TELEGRAM_WELCOME_DELETE_SECONDS";
+            printf 'export ENABLE_DATABASE_BACKUP=%q\n'          "$ENABLE_DATABASE_BACKUP";
+            printf 'export DATABASE_BACKUP_HOUR=%q\n'            "$DATABASE_BACKUP_HOUR";
+            printf 'export DATABASE_BACKUP_KEEP=%q\n'            "$DATABASE_BACKUP_KEEP";
             cat scripts/deploy-remote.sh; } \
             | ssh "${ssh_opts[@]}" "$target" bash -s

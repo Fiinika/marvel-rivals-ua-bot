@@ -45,6 +45,12 @@ class Config:
     telegram_link_allowlist: frozenset[str] = frozenset()
     # Seconds before the welcome message auto-deletes. 0 disables auto-delete.
     telegram_welcome_delete_seconds: int = 60
+    # Nightly backup: the SQLite file is snapshotted once a day into backups/
+    # next to the database; the newest N snapshots are kept. Parsed leniently —
+    # a typo never stops the bot.
+    enable_database_backup: bool = True
+    database_backup_hour: int = 4
+    database_backup_keep: int = 14
 
 
 def load_config() -> Config:
@@ -84,6 +90,11 @@ def load_config() -> Config:
     telegram_link_allowlist = _parse_invite_allowlist("TELEGRAM_LINK_ALLOWLIST")
     telegram_welcome_delete_seconds = _optional_lenient_non_negative_int("TELEGRAM_WELCOME_DELETE_SECONDS", 60)
 
+    enable_database_backup = _optional_bool("ENABLE_DATABASE_BACKUP", True)
+    database_backup_hour = _optional_hour("DATABASE_BACKUP_HOUR", 4)
+    # `or 14`: zero would mean "keep nothing", which can only be a mistake.
+    database_backup_keep = _optional_lenient_non_negative_int("DATABASE_BACKUP_KEEP", 14) or 14
+
     return Config(
         bot_token=bot_token,
         admin_chat_id=admin_chat_id,
@@ -109,6 +120,9 @@ def load_config() -> Config:
         telegram_mod_log_chat_id=telegram_mod_log_chat_id,
         telegram_link_allowlist=telegram_link_allowlist,
         telegram_welcome_delete_seconds=telegram_welcome_delete_seconds,
+        enable_database_backup=enable_database_backup,
+        database_backup_hour=database_backup_hour,
+        database_backup_keep=database_backup_keep,
     )
 
 
@@ -163,13 +177,25 @@ def _optional_positive_int_or_none(name: str, default: int | None) -> int | None
 
 
 _TRUE_VALUES = {"true", "1", "yes", "on"}
+_FALSE_VALUES = {"false", "0", "no", "off"}
 
 
 def _optional_bool(name: str, default: bool) -> bool:
+    """Parse an optional boolean, falling back to the default on typos.
+
+    Unrecognized values keep the default (like the other lenient parsers) so a
+    misspelt value can never silently flip a default-on feature like the
+    nightly backup off — explicit "false"/"0"/"no"/"off" is required for that.
+    """
     value = os.getenv(name)
     if value is None or not value.strip():
         return default
-    return value.strip().lower() in _TRUE_VALUES
+    token = value.strip().lower()
+    if token in _TRUE_VALUES:
+        return True
+    if token in _FALSE_VALUES:
+        return False
+    return default
 
 
 def _optional_int_or_none(name: str) -> int | None:
@@ -200,6 +226,22 @@ def _optional_lenient_non_negative_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return parsed if parsed >= 0 else default
+
+
+def _optional_hour(name: str, default: int) -> int:
+    """Parse an hour of day (0-23), returning the default on missing/invalid.
+
+    Lenient for the same reason as the other backup/moderation settings: a typo
+    must never stop the whole bot from starting.
+    """
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return default
+    return parsed if 0 <= parsed <= 23 else default
 
 
 def _parse_int_id_set(name: str) -> frozenset[int]:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -245,9 +246,11 @@ class SpamTracker:
         *,
         window_seconds: float = SPAM_WINDOW_SECONDS,
         max_messages: int = SPAM_MAX_MESSAGES,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._window = window_seconds
         self._max = max_messages
+        self._clock = clock
         self._buckets: dict[tuple[int, int], deque[float]] = defaultdict(deque)
         self._calls = 0
 
@@ -258,7 +261,7 @@ class SpamTracker:
             self.sweep()
 
         key = (chat_id, user_id)
-        now = time.monotonic()
+        now = self._clock()
         bucket = self._buckets[key]
         bucket.append(now)
         while bucket and now - bucket[0] > self._window:
@@ -271,7 +274,7 @@ class SpamTracker:
 
     def sweep(self) -> None:
         """Drop buckets whose newest entry is older than the window. Optional upkeep."""
-        now = time.monotonic()
+        now = self._clock()
         stale = [
             key
             for key, bucket in self._buckets.items()

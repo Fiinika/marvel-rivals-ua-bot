@@ -12,7 +12,8 @@
 #     ARTICLE_TIMEZONE / SUBMISSION_COOLDOWN_SECONDS, plus the Telegram chat
 #     moderation block: ENABLE_TELEGRAM_MODERATION / TELEGRAM_MODERATION_CHAT_IDS
 #     / TELEGRAM_MOD_LOG_CHAT_ID / TELEGRAM_LINK_ALLOWLIST /
-#     TELEGRAM_WELCOME_DELETE_SECONDS.
+#     TELEGRAM_WELCOME_DELETE_SECONDS, plus the nightly backup block:
+#     ENABLE_DATABASE_BACKUP / DATABASE_BACKUP_HOUR / DATABASE_BACKUP_KEEP.
 #
 # Keys we are NOT given are left untouched in .env.prod, so you may also manage
 # .env.prod by hand on the box. .env.prod is kept mode 0600. The bot has no HTTP
@@ -80,6 +81,9 @@ upsert TELEGRAM_MODERATION_CHAT_IDS "${TELEGRAM_MODERATION_CHAT_IDS-}"
 upsert TELEGRAM_MOD_LOG_CHAT_ID "${TELEGRAM_MOD_LOG_CHAT_ID-}"
 upsert TELEGRAM_LINK_ALLOWLIST "${TELEGRAM_LINK_ALLOWLIST-}"
 upsert TELEGRAM_WELCOME_DELETE_SECONDS "${TELEGRAM_WELCOME_DELETE_SECONDS-}"
+upsert ENABLE_DATABASE_BACKUP "${ENABLE_DATABASE_BACKUP-}"
+upsert DATABASE_BACKUP_HOUR "${DATABASE_BACKUP_HOUR-}"
+upsert DATABASE_BACKUP_KEEP "${DATABASE_BACKUP_KEEP-}"
 
 # --- Pull & roll out ------------------------------------------------------
 export BOT_IMAGE

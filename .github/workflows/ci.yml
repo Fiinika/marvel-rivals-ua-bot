@@ -5,13 +5,14 @@
 #   1. installs the dependency set (also proves requirements.txt resolves),
 #   2. byte-compiles every module and imports the entrypoint — the Python
 #      analogue of a build, catching syntax and import-time errors,
-#   3. lints with Ruff.
+#   3. runs the unit tests (pure moderation logic, config parsers, DB backup),
+#   4. lints with Ruff.
 #
 # The bot stores its data in a local SQLite file (DATABASE_PATH, default
 # bot.db), so CI needs no database service container — there is nothing to
 # provision. Postgres is intentionally not part of this pipeline.
 #
-# Ruff is pinned so lint results are reproducible; bump it deliberately.
+# Ruff and pytest are pinned so CI results are reproducible; bump deliberately.
 # Formatting (`ruff format --check`) is intentionally not enforced here.
 
 name: CI
@@ -45,12 +46,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff==0.15.15
+          pip install ruff==0.15.15 pytest==8.4.1
 
       - name: Build (byte-compile + import check)
         run: |
           python -m compileall -q .
           python -c "import main"
+
+      - name: Test
+        run: pytest -q
 
       - name: Lint
         run: ruff check .
