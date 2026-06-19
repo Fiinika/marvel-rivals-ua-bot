@@ -36,9 +36,6 @@ logger = logging.getLogger(__name__)
 
 COLLECTOR_ID = "wiki_facts"
 SOURCE_TYPE = "wiki_facts"
-# How many random heroes to pull trivia from per run — enough to almost always find
-# an unseen fact, while bounding the number of wiki API calls.
-HEROES_PER_RUN = 5
 
 DEFINITION = CollectorDefinition(
     collector_id=COLLECTOR_ID,
@@ -68,10 +65,26 @@ class WikiFactsCollector(BaseNewsCollector):
 
         random.shuffle(heroes)
         entries: list[ListingEntry] = []
-        for hero in heroes[:HEROES_PER_RUN]:
-            for fact in await self.client.fetch_trivia_facts(hero):
-                entries.append(ListingEntry(dedup_key=_fact_id(fact), payload=fact))
+        for hero in heroes:
+            hero_entries = [
+                ListingEntry(dedup_key=_fact_id(fact), payload=fact)
+                for fact in await self.client.fetch_trivia_facts(hero)
+            ]
+            entries.extend(hero_entries)
+            # Stop as soon as a hero contributes an UNSEEN fact — the common case is
+            # the first hero, so we rarely scan more than one. But keep walking the
+            # (shuffled) roster while everything seen so far is already posted, so a
+            # depleted random sample never silently starves the weekly rubric; we
+            # only give up once the whole roster is exhausted.
+            if await self._has_unseen(hero_entries):
+                break
         return entries
+
+    async def _has_unseen(self, entries: list[ListingEntry]) -> bool:
+        for entry in entries:
+            if not await self.db.is_source_seen(SOURCE_TYPE, entry.dedup_key):
+                return True
+        return False
 
     async def parse_entry(self, entry: ListingEntry) -> DraftCandidate:
         fact: WikiFact = entry.payload  # type: ignore[assignment]
@@ -147,11 +160,18 @@ async def run_wiki_facts_once(bot: Bot, config: Config, db: Database) -> bool:
     submission was created."""
     collector = WikiFactsCollector(config=config, db=db, bot=bot)
     stats = await collector.run_once(mode=CollectionMode.MANUAL_LATEST)
-    logger.info(
-        "Wiki-facts run: found=%s new=%s sent=%s failed=%s",
-        stats.found,
-        stats.new,
-        stats.sent_to_moderation,
-        stats.failed,
-    )
+    if stats.sent_to_moderation == 0 and stats.failed == 0:
+        # Make a no-op run observable rather than a silent week-long gap.
+        logger.warning(
+            "Wiki-facts run produced no post (found=%s) — every sampled fact is already seen or none had a Trivia section.",
+            stats.found,
+        )
+    else:
+        logger.info(
+            "Wiki-facts run: found=%s new=%s sent=%s failed=%s",
+            stats.found,
+            stats.new,
+            stats.sent_to_moderation,
+            stats.failed,
+        )
     return stats.sent_to_moderation > 0

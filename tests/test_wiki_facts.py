@@ -6,9 +6,10 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import services.collectors.wiki_facts.collector as wiki_collector
 from services.collectors.base import ListingEntry
 from services.collectors.runner import BaseNewsCollector
-from services.collectors.wiki_facts.client import WikiFact, _extract_facts
+from services.collectors.wiki_facts.client import WikiFact, _clean_fact, _extract_facts
 from services.collectors.wiki_facts.collector import WikiFactsCollector, _fact_id
 from services.gemini import GeminiDraftInput, _build_prompt, _select_prompt_template, _load_wiki_fact_prompt_template
 
@@ -30,6 +31,30 @@ def test_extract_facts_cleans_wikitext() -> None:
     assert "Short" not in facts
 
 
+def test_clean_fact_unwraps_nested_templates() -> None:
+    raw = "{{Quote|text with {{inner}} bits}} this is a real factual sentence about the hero."
+    assert _clean_fact(raw) == "this is a real factual sentence about the hero."
+
+
+def test_extract_facts_drops_residual_template_markup() -> None:
+    # A template nested deeper than the unwrap cap leaves braces -> the bullet is
+    # dropped rather than published garbled.
+    deep = "* " + "{{" * 8 + "x" + "}}" * 8 + " trailing text that is long enough to pass the filter here"
+    assert _extract_facts(deep) == []
+
+
+def test_clean_fact_strips_media_links_and_keeps_display_text() -> None:
+    raw = "See [[File:foo.png|thumb|200px|Caption]] and [[Hero Page|Magik]] do cool things together here."
+    cleaned = _clean_fact(raw)
+    assert "thumb" not in cleaned and "200px" not in cleaned and "File:" not in cleaned
+    assert "Magik" in cleaned  # display text (last pipe segment) kept
+
+
+def test_clean_fact_strips_bare_and_raw_urls() -> None:
+    assert "http" not in _clean_fact("A fact with a bare link [https://evil.example.com] inside it here.")
+    assert "http" not in _clean_fact("A fact with a raw https://evil.example.com url inside it right here.")
+
+
 def test_fact_id_is_stable_and_whitespace_insensitive() -> None:
     a = WikiFact("Magik", "Illyana   first appeared in 1975.", "https://w/Magik")
     b = WikiFact("Magik", "illyana first appeared in 1975.", "https://w/Magik")
@@ -48,9 +73,17 @@ class _StubClient:
         return self._facts.get(hero, [])
 
 
-def _collector(facts: dict[str, list[WikiFact]]) -> WikiFactsCollector:
+class _FakeDB:
+    def __init__(self, seen: set[str] | None = None) -> None:
+        self.seen = set(seen or set())
+
+    async def is_source_seen(self, source_type: str, source_id: str) -> bool:
+        return source_id in self.seen
+
+
+def _collector(facts: dict[str, list[WikiFact]], *, db: _FakeDB | None = None) -> WikiFactsCollector:
     collector = WikiFactsCollector(
-        config=SimpleNamespace(wiki_facts_api_url="https://w/api.php"), db=None, bot=None
+        config=SimpleNamespace(wiki_facts_api_url="https://w/api.php"), db=db or _FakeDB(), bot=None
     )
     collector.client = _StubClient(facts)
     return collector
@@ -61,13 +94,26 @@ def test_collector_opts_out_of_cross_source_dedup() -> None:
     assert BaseNewsCollector.participates_in_cross_source_dedup is True
 
 
-def test_fetch_listing_flattens_facts_to_entries() -> None:
+def test_fetch_listing_stops_at_first_hero_with_an_unseen_fact(monkeypatch) -> None:
+    # Deterministic order; all facts unseen -> stop after the first hero (cheap).
+    monkeypatch.setattr(wiki_collector.random, "shuffle", lambda seq: None)
     f1 = WikiFact("Magik", "Magik can teleport through Limbo stepping discs.", "https://w/Magik")
     f2 = WikiFact("Blade", "Blade is a Dhampir, half human and half vampire.", "https://w/Blade")
     entries = asyncio.run(_collector({"Magik": [f1], "Blade": [f2]}).fetch_listing())
 
-    keys = {e.dedup_key for e in entries}
-    assert keys == {_fact_id(f1), _fact_id(f2)}
+    assert [e.dedup_key for e in entries] == [_fact_id(f1)]
+
+
+def test_fetch_listing_keeps_scanning_when_first_heroes_are_all_seen(monkeypatch) -> None:
+    # Anti-starvation: the first hero's only fact is already seen, so the scan must
+    # continue to the next hero rather than give up.
+    monkeypatch.setattr(wiki_collector.random, "shuffle", lambda seq: None)
+    f1 = WikiFact("Magik", "Magik can teleport through Limbo stepping discs.", "https://w/Magik")
+    f2 = WikiFact("Blade", "Blade is a Dhampir, half human and half vampire.", "https://w/Blade")
+    db = _FakeDB(seen={_fact_id(f1)})
+    entries = asyncio.run(_collector({"Magik": [f1], "Blade": [f2]}, db=db).fetch_listing())
+
+    assert [e.dedup_key for e in entries] == [_fact_id(f1), _fact_id(f2)]
 
 
 def test_parse_entry_builds_did_you_know_candidate() -> None:

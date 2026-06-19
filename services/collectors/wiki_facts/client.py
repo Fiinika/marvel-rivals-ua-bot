@@ -30,9 +30,17 @@ _MIN_FACT_LENGTH = 25
 _MAX_FACT_LENGTH = 600
 
 _REF_RE = re.compile(r"<ref[^>]*>.*?</ref>|<ref[^>]*/>", re.IGNORECASE | re.DOTALL)
+# Innermost {{...}}; applied repeatedly to unwrap nested templates.
 _TEMPLATE_RE = re.compile(r"\{\{[^{}]*\}\}")
-_WIKILINK_RE = re.compile(r"\[\[(?:[^\]|]+\|)?([^\]]+)\]\]")
-_EXTLINK_RE = re.compile(r"\[(?:https?://)\S+\s+([^\]]+)\]")
+_TEMPLATE_MAX_PASSES = 5
+# Whole [[...]] inner; resolved by _wikilink_text (drops File:/Image:/Category:,
+# else keeps the display text after the last pipe).
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_MEDIA_NAMESPACES = {"file", "image", "category"}
+# [https://url optional label] — label kept when present, else dropped.
+_EXTLINK_RE = re.compile(r"\[https?://\S+(?:\s+([^\]]+))?\]")
+# Bare/raw URLs left after the bracket forms.
+_RAW_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _BULLET_RE = re.compile(r"^\*+\s*(.+?)\s*$", re.MULTILINE)
 
@@ -112,6 +120,10 @@ def _extract_facts(wikitext: str) -> list[str]:
     facts: list[str] = []
     for raw in _BULLET_RE.findall(wikitext or ""):
         fact = _clean_fact(raw)
+        # Drop anything that still carries template markup (e.g. a template nested
+        # deeper than the unwrap cap) rather than publish a garbled fact.
+        if "{" in fact or "}" in fact:
+            continue
         if _MIN_FACT_LENGTH <= len(fact) <= _MAX_FACT_LENGTH:
             facts.append(fact)
     return facts
@@ -119,9 +131,25 @@ def _extract_facts(wikitext: str) -> list[str]:
 
 def _clean_fact(raw: str) -> str:
     text = _REF_RE.sub("", raw)
-    text = _TEMPLATE_RE.sub("", text)
-    text = _EXTLINK_RE.sub(r"\1", text)
-    text = _WIKILINK_RE.sub(r"\1", text)
+    # Unwrap nested templates by repeating the innermost-match strip to a fixed point.
+    for _ in range(_TEMPLATE_MAX_PASSES):
+        stripped = _TEMPLATE_RE.sub("", text)
+        if stripped == text:
+            break
+        text = stripped
+    text = _EXTLINK_RE.sub(lambda m: m.group(1) or "", text)
+    text = _WIKILINK_RE.sub(_wikilink_text, text)
+    text = _RAW_URL_RE.sub("", text)
     text = _HTML_TAG_RE.sub("", text)
     text = text.replace("'''", "").replace("''", "")
     return " ".join(text.split()).strip()
+
+
+def _wikilink_text(match: re.Match[str]) -> str:
+    inner = match.group(1)
+    target = inner.split("|", 1)[0].strip()
+    # Drop media/category links entirely; for normal links keep the display text
+    # (the segment after the last pipe), so layout params like thumb|200px are gone.
+    if target.split(":", 1)[0].strip().casefold() in _MEDIA_NAMESPACES:
+        return ""
+    return inner.split("|")[-1].strip()
