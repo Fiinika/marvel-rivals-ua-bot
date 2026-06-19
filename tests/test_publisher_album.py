@@ -14,7 +14,9 @@ from services.publisher import (
     _failing_media_index,
     _is_fetchable_media_url,
     album_caption_html,
+    download_external_video,
     link_preview_options_for,
+    needs_external_video_download,
 )
 
 
@@ -147,3 +149,71 @@ def test_download_album_photo_accepts_valid_image() -> None:
     data, filename = result
     assert data == b"\x89PNG-data"
     assert filename == "art_3.png"
+
+
+# --- external (Bluesky) video download routing + guards ------------------------
+
+
+def test_needs_external_video_download_only_for_external_source_videos() -> None:
+    assert needs_external_video_download(
+        {"message_type": "video", "source_type": "bluesky", "media_url": "https://pds.host.bsky.network/x"}
+    ) is True
+    # A user video carries a Telegram file_id (sent directly) -> not downloaded.
+    assert needs_external_video_download(
+        {"message_type": "video", "source_type": "bluesky", "file_id": "abc", "media_url": "https://x"}
+    ) is False
+    # Non-download source / non-video / non-http URL -> not downloaded.
+    assert needs_external_video_download(
+        {"message_type": "video", "source_type": "reddit", "media_url": "https://x"}
+    ) is False
+    assert needs_external_video_download(
+        {"message_type": "photo", "source_type": "bluesky", "media_url": "https://x"}
+    ) is False
+    assert needs_external_video_download(
+        {"message_type": "video", "source_type": "bluesky", "media_url": "ftp://x"}
+    ) is False
+
+
+def _patch_async_client(monkeypatch, handler) -> None:
+    """Route download_external_video's own AsyncClient through a MockTransport."""
+    orig = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda *a, **k: orig(transport=httpx.MockTransport(handler), follow_redirects=False)
+    )
+
+
+def test_download_external_video_accepts_mp4_within_cap(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"\x00\x00\x00 ftypisom")
+
+    _patch_async_client(monkeypatch, handler)
+    result = asyncio.run(download_external_video("https://pds.host.bsky.network/x", max_bytes=10_000_000))
+
+    assert result is not None
+    data, filename = result
+    assert data.startswith(b"\x00\x00\x00 ftyp")
+    assert filename == "video.mp4"
+
+
+def test_download_external_video_rejects_internal_url_without_fetching(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"x")
+
+    _patch_async_client(monkeypatch, handler)
+    result = asyncio.run(download_external_video("https://169.254.169.254/x.mp4", max_bytes=10_000_000))
+
+    assert result is None
+    assert calls == []  # SSRF guard short-circuits before any request
+
+
+def test_download_external_video_rejects_non_video_content_type(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<html>")
+
+    _patch_async_client(monkeypatch, handler)
+    result = asyncio.run(download_external_video("https://pds.host.bsky.network/x", max_bytes=10_000_000))
+
+    assert result is None

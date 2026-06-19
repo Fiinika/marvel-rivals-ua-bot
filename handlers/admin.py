@@ -34,6 +34,7 @@ from services.i18n import t
 from services.post_footer import format_post_html, submission_allows_source_link
 from services.publisher import (
     DISABLED_LINK_PREVIEW,
+    DOWNLOAD_VIDEO_SOURCE_TYPES,
     PublishingError,
     TELEGRAM_CAPTION_LIMIT,
     TELEGRAM_TEXT_LIMIT,
@@ -580,10 +581,17 @@ async def _start_edit(
         await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
         return
 
-    # Album digests (one grouped post) and YouTube posts (previewed as a native
-    # video) are not edited in place — the per-part edit flow can't edit a media
-    # group / video message's text — so admins approve or reject them as a whole.
-    if str(submission.get("message_type") or "") == "album" or str(submission.get("source_type") or "") == "youtube":
+    # Album digests (one grouped post) and native-video posts (YouTube, or a
+    # downloaded Bluesky video) are not edited in place — the per-part edit flow
+    # can't edit a media group / video message's text — so admins approve or
+    # reject them as a whole.
+    message_type = str(submission.get("message_type") or "")
+    source_type = str(submission.get("source_type") or "")
+    if (
+        message_type == "album"
+        or source_type == "youtube"
+        or (message_type == "video" and source_type in DOWNLOAD_VIDEO_SOURCE_TYPES)
+    ):
         await _answer_callback(callback, t("admin.alert.media_post_edit_unsupported"), show_alert=True)
         return
 

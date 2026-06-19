@@ -31,6 +31,16 @@ def _is_bluesky_image_url(url: str) -> bool:
     return parsed.scheme == "https" and (parsed.hostname or "").lower() == _BLUESKY_IMAGE_HOST
 
 
+# A CIDv1 in base32 (what Bluesky embeds use): "baf" + lowercase base32 chars. The
+# value selects which of the AUTHOR's own blobs to fetch, so it just needs to be a
+# well-formed CID — but validating it keeps junk out of the getBlob URL.
+_CID_RE = re.compile(r"^baf[a-z2-7]{20,}$")
+
+
+def _is_valid_cid(cid: str) -> bool:
+    return bool(_CID_RE.match(cid))
+
+
 @dataclass(frozen=True)
 class BlueskyPost:
     uri: str
@@ -39,6 +49,16 @@ class BlueskyPost:
     created_at: str | None
     image_urls: tuple[str, ...]
     has_video: bool
+    # The video blob's CID (from an app.bsky.embed.video#view), used together with
+    # the author DID to fetch the original MP4 via com.atproto.sync.getBlob. None
+    # when the post has no video.
+    video_cid: str | None = None
+
+    @property
+    def author_did(self) -> str:
+        # at://<did>/app.bsky.feed.post/<rkey> — the DID owns the video blob.
+        parts = self.uri.split("/")
+        return parts[2] if len(parts) > 2 else ""
 
 
 class BlueskyFeedFetcher:
@@ -126,7 +146,7 @@ def _parse_post(post: Any) -> BlueskyPost | None:
     text = str(record.get("text") or "").strip()
     created_at = _normalize_timestamp(record.get("createdAt") or post.get("indexedAt"))
 
-    image_urls, has_video = _extract_media(post.get("embed"))
+    image_urls, video_cid = _extract_media(post.get("embed"))
 
     return BlueskyPost(
         uri=uri,
@@ -134,13 +154,15 @@ def _parse_post(post: Any) -> BlueskyPost | None:
         text=text,
         created_at=created_at,
         image_urls=tuple(image_urls),
-        has_video=has_video,
+        has_video=video_cid is not None,
+        video_cid=video_cid,
     )
 
 
-def _extract_media(embed: Any) -> tuple[list[str], bool]:
+def _extract_media(embed: Any) -> tuple[list[str], str | None]:
+    """Return (image URLs, video blob CID). At most one of the two is populated."""
     if not isinstance(embed, dict):
-        return [], False
+        return [], None
 
     embed_type = str(embed.get("$type") or "")
     if embed_type == "app.bsky.embed.images#view":
@@ -153,16 +175,17 @@ def _extract_media(embed: Any) -> tuple[list[str], bool]:
             # can never become an SSRF target or an arbitrary URL sent to Telegram.
             if url and _is_bluesky_image_url(url):
                 urls.append(url)
-        return urls, False
+        return urls, None
 
     if embed_type == "app.bsky.embed.video#view":
-        return [], True
+        cid = str(embed.get("cid") or "").strip()
+        return [], (cid if _is_valid_cid(cid) else None)
 
     # A post can carry both a quote and media; the media lives under "media".
     if embed_type == "app.bsky.embed.recordWithMedia#view":
         return _extract_media(embed.get("media"))
 
-    return [], False
+    return [], None
 
 
 def _normalize_timestamp(value: Any) -> str | None:

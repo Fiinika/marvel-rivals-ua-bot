@@ -29,6 +29,10 @@ DISABLED_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 # Sources whose posts are published as TEXT with a playable link preview of the
 # source URL (e.g. YouTube — Telegram embeds the player) instead of a static photo.
 PREVIEW_LINK_SOURCE_TYPES = {"youtube"}
+# Sources whose "video" media is an EXTERNAL URL the bot must download and re-upload
+# natively (Telegram can't fetch it by URL — e.g. a Bluesky getBlob MP4). User
+# video submissions carry a Telegram file_id instead and are sent directly.
+DOWNLOAD_VIDEO_SOURCE_TYPES = {"bluesky"}
 # Album sources whose draft_text is ALREADY rendered HTML (built with its own
 # hyperlinks/footer) and must be sent as-is; every other album caption is plain
 # text run through the normal formatter.
@@ -42,6 +46,11 @@ _ALBUM_IMAGE_USER_AGENT = "Mozilla/5.0 (compatible; MarvelRivalsUABot/1.0; +http
 _ALBUM_IMAGE_TIMEOUT_SECONDS = 25.0
 _ALBUM_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _ALBUM_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+# Bot-side download of an external video (e.g. a Bluesky MP4 blob) for native
+# re-upload. Same SSRF guards as the album downloader; only progressive MP4.
+_EXTERNAL_VIDEO_TIMEOUT_SECONDS = 60.0
+_EXTERNAL_VIDEO_ALLOWED_CONTENT_TYPES = {"video/mp4"}
 
 
 class PublishingError(RuntimeError):
@@ -76,6 +85,16 @@ async def publish_submission(bot: Bot, config: Config, submission: dict[str, Any
                     draft_text,
                     parse_mode=parse_mode,
                     force_single_message=force_single_media_message,
+                )
+            elif message_type == "video" and needs_external_video_download(part_submission):
+                await send_downloaded_video_post(
+                    bot,
+                    config.publish_chat_id,
+                    str(part_submission.get("media_url") or ""),
+                    draft_text,
+                    parse_mode=parse_mode,
+                    link_preview=link_preview_options_for(part_submission),
+                    max_bytes=max(1, config.bluesky_video_max_mb) * 1024 * 1024,
                 )
             elif message_type == "video":
                 await _send_media_with_optional_text(
@@ -146,6 +165,86 @@ async def _publish_text_or_youtube_video(
         return
 
     await _send_text(bot, config.publish_chat_id, text, parse_mode=parse_mode, link_preview=link_preview)
+
+
+def needs_external_video_download(part: dict[str, Any]) -> bool:
+    """Whether a video part is an external URL the bot must download + re-upload
+    (a DOWNLOAD_VIDEO_SOURCE_TYPES source with an https media_url and no file_id),
+    rather than a Telegram file_id that send_video can take directly."""
+    if str(part.get("message_type") or "") != "video":
+        return False
+    if str(part.get("source_type") or "") not in DOWNLOAD_VIDEO_SOURCE_TYPES:
+        return False
+    if str(part.get("file_id") or "").strip():
+        return False
+    return _is_safe_http_url(str(part.get("media_url") or ""))
+
+
+async def download_external_video(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:
+    """Download an external MP4 for native re-upload. SSRF-guarded (https, no
+    internal-IP hosts, no redirects) and streamed with a hard size cap; returns
+    None when the URL is disallowed, the body is not an MP4, it is too large, or
+    the download fails."""
+    if not _is_fetchable_media_url(url):
+        logger.warning("Skipping external video with a disallowed URL: %s", url)
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=httpx.Timeout(_EXTERNAL_VIDEO_TIMEOUT_SECONDS),
+            headers={"User-Agent": _ALBUM_IMAGE_USER_AGENT},
+        ) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+
+                content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+                if content_type not in _EXTERNAL_VIDEO_ALLOWED_CONTENT_TYPES:
+                    logger.warning("Skipping external video with content-type %r: %s", content_type, url)
+                    return None
+
+                declared = response.headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > max_bytes:
+                    logger.info("External video too large (declared %s bytes); skipping: %s", declared, url)
+                    return None
+
+                buffer = bytearray()
+                async for chunk in response.aiter_bytes():
+                    buffer.extend(chunk)
+                    if len(buffer) > max_bytes:
+                        logger.info("External video over the %s-byte limit; skipping: %s", max_bytes, url)
+                        return None
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("External video download failed for %s: %s", url, exc)
+        return None
+
+    if not buffer:
+        return None
+    return bytes(buffer), "video.mp4"
+
+
+async def send_downloaded_video_post(
+    bot: Bot,
+    chat_id: int,
+    video_url: str,
+    caption: str,
+    *,
+    parse_mode: str | None,
+    link_preview: LinkPreviewOptions,
+    max_bytes: int,
+):
+    """Send an external-URL video as a NATIVE inline Telegram video (downloaded +
+    re-uploaded), falling back to a text post (with the source link) when the video
+    is unavailable, too large, or the upload is rejected. Returns the sent message."""
+    video = await download_external_video(video_url, max_bytes=max_bytes)
+    if video is not None:
+        data, filename = video
+        try:
+            return await _send_video_bytes(bot, chat_id, data, filename, caption, parse_mode=parse_mode)
+        except (TelegramAPIError, TimeoutError, ClientOSError) as exc:
+            logger.warning("Native external video upload failed (%s); falling back to text.", exc)
+
+    return await _send_text(bot, chat_id, caption, parse_mode=parse_mode, link_preview=link_preview)
 
 
 async def send_youtube_post(

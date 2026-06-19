@@ -8,6 +8,7 @@ from config import Config
 from database import Database
 from services.collectors.base import CollectorDefinition, DraftCandidate, ListingEntry
 from services.collectors.bluesky.feed_fetcher import BlueskyFeedFetcher, BlueskyPost
+from services.collectors.bluesky.video import resolve_video_blob_url
 from services.collectors.runner import BaseNewsCollector
 from services.i18n import t
 
@@ -48,8 +49,8 @@ class BlueskyCollector(BaseNewsCollector):
 
     async def parse_entry(self, entry: ListingEntry) -> DraftCandidate:
         post: BlueskyPost = entry.payload  # type: ignore[assignment]
-        has_media = bool(post.image_urls)
         title = _derive_title(post.text)
+        has_media, media_type, media_url, additional_media_urls = await self._resolve_media(post)
 
         return DraftCandidate(
             source_id=post.uri,
@@ -62,10 +63,26 @@ class BlueskyCollector(BaseNewsCollector):
             article_date=post.created_at,
             article_date_display=_display_date(post.created_at),
             has_media=has_media,
-            media_url=post.image_urls[0] if has_media else None,
-            media_type="photo" if has_media else "none",
-            additional_media_urls=list(post.image_urls[1:]) if has_media else None,
+            media_url=media_url,
+            media_type=media_type,
+            additional_media_urls=additional_media_urls,
         )
+
+    async def _resolve_media(self, post: BlueskyPost) -> tuple[bool, str, str | None, list[str] | None]:
+        """Return (has_media, media_type, media_url, additional_urls). Photos win
+        when present; otherwise a video post is resolved to its direct MP4 blob URL
+        (downloaded + re-uploaded natively at send time). Falls back to a text post
+        when video download is disabled or the blob URL cannot be resolved."""
+        if post.image_urls:
+            return True, "photo", post.image_urls[0], list(post.image_urls[1:]) or None
+
+        download_enabled = getattr(self.config, "enable_bluesky_video_download", True)
+        if post.has_video and post.video_cid and download_enabled:
+            blob_url = await resolve_video_blob_url(post.author_did, post.video_cid)
+            if blob_url:
+                return True, "video", blob_url, None
+
+        return False, "none", None, None
 
 
 def _derive_title(text: str) -> str:
@@ -105,6 +122,6 @@ def _build_original_text(post: BlueskyPost, title: str) -> str:
         ]
         parts.extend(["", *media_lines, t("collectors.common.original_text.media_type", value="photo")])
     elif post.has_video:
-        parts.extend(["", t("collectors.common.original_text.media_type", value="video (не завантажено)")])
+        parts.extend(["", t("collectors.common.original_text.media_type", value="video")])
 
     return "\n".join(parts).strip()

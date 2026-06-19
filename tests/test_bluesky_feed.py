@@ -34,13 +34,19 @@ def _image_post(uri: str, text: str, *, handle: str = "marvelrivalsglobal.bsky.s
     }
 
 
-def _video_post(uri: str, text: str) -> dict:
+_VIDEO_CID = "bafkreieyoi3vyluyzrqqzctywn2we7zwdpl6nkpcd5hz43tuprkgy6odke"
+
+
+def _video_post(uri: str, text: str, *, cid: str | None = _VIDEO_CID) -> dict:
+    embed = {"$type": "app.bsky.embed.video#view", "playlist": "https://video.bsky.app/x.m3u8"}
+    if cid is not None:
+        embed["cid"] = cid
     return {
         "post": {
             "uri": f"at://did:plc:abc/app.bsky.feed.post/{uri}",
             "author": {"handle": "marvelrivalsglobal.bsky.social"},
             "record": {"text": text, "createdAt": "2026-06-11T10:00:00.000Z"},
-            "embed": {"$type": "app.bsky.embed.video#view", "playlist": "https://video.bsky.app/x.m3u8"},
+            "embed": embed,
         }
     }
 
@@ -107,13 +113,33 @@ def test_parse_author_feed_skips_reposts() -> None:
     assert [p.text for p in posts] == ["Own post"]
 
 
-def test_video_post_is_flagged_without_media() -> None:
+def test_video_post_exposes_blob_cid_and_author_did() -> None:
     feed = {"feed": [_video_post("vvv", "Watch the trailer")]}
     posts = parse_author_feed(feed, actor="marvelrivalsglobal.bsky.social")
 
     assert len(posts) == 1
     assert posts[0].has_video is True
     assert posts[0].image_urls == ()
+    assert posts[0].video_cid == _VIDEO_CID
+    assert posts[0].author_did == "did:plc:abc"  # owns the blob, used for getBlob
+
+
+def test_video_post_without_cid_is_not_flagged_as_video() -> None:
+    # No CID -> the original MP4 cannot be fetched, so the post is not a video post
+    # (it falls back to a text post downstream).
+    feed = {"feed": [_video_post("nocid", "Trailer", cid=None)]}
+    posts = parse_author_feed(feed, actor="marvelrivalsglobal.bsky.social")
+
+    assert posts[0].has_video is False
+    assert posts[0].video_cid is None
+
+
+def test_video_post_with_malformed_cid_is_rejected() -> None:
+    feed = {"feed": [_video_post("badcid", "Trailer", cid="not-a-valid-cid!!")]}
+    posts = parse_author_feed(feed, actor="marvelrivalsglobal.bsky.social")
+
+    assert posts[0].has_video is False
+    assert posts[0].video_cid is None
 
 
 def test_duplicate_uris_collapse() -> None:
@@ -205,6 +231,88 @@ def test_collector_maps_post_to_draft_candidate() -> None:
     assert candidate.source_name == "Bluesky Marvel Rivals"
     assert candidate.article_date == "2026-06-12T16:00:37.994523+00:00"
     assert candidate.article_date_display == "2026-06-12"
+
+
+def test_collector_resolves_video_to_native_video_candidate(monkeypatch) -> None:
+    import services.collectors.bluesky.collector as bc
+
+    async def fake_resolve(did: str, cid: str) -> str:
+        return f"https://pds.host.bsky.network/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}"
+
+    monkeypatch.setattr(bc, "resolve_video_blob_url", fake_resolve)
+
+    post = BlueskyPost(
+        uri="at://did:plc:abc/app.bsky.feed.post/vid",
+        web_url="https://bsky.app/profile/h/post/vid",
+        text="Новий трейлер!",
+        created_at="2026-06-11T10:00:00+00:00",
+        image_urls=(),
+        has_video=True,
+        video_cid=_VIDEO_CID,
+    )
+    collector = BlueskyCollector(
+        config=SimpleNamespace(bluesky_actor="x", enable_bluesky_video_download=True),
+        db=None,
+        bot=None,
+    )
+
+    candidate = asyncio.run(collector.parse_entry(ListingEntry(dedup_key=post.uri, payload=post)))
+
+    assert candidate.has_media is True
+    assert candidate.media_type == "video"
+    assert "com.atproto.sync.getBlob" in candidate.media_url
+    assert candidate.additional_media_urls is None
+
+
+def test_collector_video_falls_back_to_text_when_download_disabled() -> None:
+    post = BlueskyPost(
+        uri="at://did:plc:abc/app.bsky.feed.post/vid",
+        web_url="https://bsky.app/profile/h/post/vid",
+        text="Новий трейлер!",
+        created_at=None,
+        image_urls=(),
+        has_video=True,
+        video_cid=_VIDEO_CID,
+    )
+    collector = BlueskyCollector(
+        config=SimpleNamespace(bluesky_actor="x", enable_bluesky_video_download=False),
+        db=None,
+        bot=None,
+    )
+
+    candidate = asyncio.run(collector.parse_entry(ListingEntry(dedup_key=post.uri, payload=post)))
+
+    assert candidate.has_media is False
+    assert candidate.media_type == "none"
+
+
+def test_collector_video_falls_back_to_text_when_unresolvable(monkeypatch) -> None:
+    import services.collectors.bluesky.collector as bc
+
+    async def fail_resolve(_did: str, _cid: str):
+        return None
+
+    monkeypatch.setattr(bc, "resolve_video_blob_url", fail_resolve)
+
+    post = BlueskyPost(
+        uri="at://did:plc:abc/app.bsky.feed.post/vid",
+        web_url="https://bsky.app/profile/h/post/vid",
+        text="Трейлер!",
+        created_at=None,
+        image_urls=(),
+        has_video=True,
+        video_cid=_VIDEO_CID,
+    )
+    collector = BlueskyCollector(
+        config=SimpleNamespace(bluesky_actor="x", enable_bluesky_video_download=True),
+        db=None,
+        bot=None,
+    )
+
+    candidate = asyncio.run(collector.parse_entry(ListingEntry(dedup_key=post.uri, payload=post)))
+
+    assert candidate.has_media is False
+    assert candidate.media_type == "none"
 
 
 def test_collector_title_fallback_for_image_only_post() -> None:

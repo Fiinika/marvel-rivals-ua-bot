@@ -208,6 +208,21 @@ def test_youtube_exclude_keywords_can_be_disabled(monkeypatch: pytest.MonkeyPatc
     assert config.youtube_exclude_keywords == frozenset()
 
 
+def test_bluesky_video_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    for key in ("ENABLE_BLUESKY_VIDEO_DOWNLOAD", "BLUESKY_VIDEO_MAX_MB"):
+        monkeypatch.delenv(key, raising=False)
+    config = cfg.load_config()
+    assert config.enable_bluesky_video_download is True
+    assert config.bluesky_video_max_mb == 48
+
+    monkeypatch.setenv("ENABLE_BLUESKY_VIDEO_DOWNLOAD", "false")
+    monkeypatch.setenv("BLUESKY_VIDEO_MAX_MB", "20")
+    config = cfg.load_config()
+    assert config.enable_bluesky_video_download is False
+    assert config.bluesky_video_max_mb == 20
+
+
 def test_reddit_source_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     for key in ("ENABLE_REDDIT_SOURCE", "REDDIT_SUBREDDIT", "REDDIT_FLAIRS", "REDDIT_EXCLUDE_KEYWORDS"):

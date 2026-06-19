@@ -22,7 +22,9 @@ from services.publisher import (
     album_caption_html,
     album_image_urls,
     link_preview_options_for,
+    needs_external_video_download,
     send_album_message,
+    send_downloaded_video_post,
     send_youtube_post,
 )
 from services.telegram_retry import delay_between_telegram_sends, send_with_retries
@@ -147,6 +149,22 @@ async def _send_part_message(bot: Bot, config: Config, chat_id: int, part: dict)
         )
         if sent is not None:
             return SentModerationPart(content_message_id=sent.message_id)
+
+    # A Bluesky (or other external-URL) video is downloaded and previewed as a
+    # native inline video — exactly as it will be published — with a text fallback.
+    if needs_external_video_download(part):
+        sent = await send_downloaded_video_post(
+            bot,
+            chat_id,
+            str(part.get("media_url") or ""),
+            text,
+            parse_mode="HTML",
+            link_preview=link_preview_options_for(part),
+            max_bytes=max(1, config.bluesky_video_max_mb) * 1024 * 1024,
+        )
+        # The single returned message carries the preview (native video or text
+        # fallback); point both ids at it so cleanup deletes the right message.
+        return SentModerationPart(content_message_id=sent.message_id, media_message_id=sent.message_id)
 
     if message_type == "photo" and media_value:
         return await _send_media_part(

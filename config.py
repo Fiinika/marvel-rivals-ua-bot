@@ -109,6 +109,12 @@ class Config:
     # like the official-site collector. Parsed leniently.
     enable_bluesky_source: bool = False
     bluesky_actor: str = "marvelrivalsglobal.bsky.social"
+    # Download a Bluesky post's video (its original MP4 blob via getBlob) and
+    # re-upload it as a NATIVE inline Telegram video, instead of dropping the post
+    # to text. Videos over BLUESKY_VIDEO_MAX_MB (Telegram's upload cap) fall back to
+    # a text post. Parsed leniently.
+    enable_bluesky_video_download: bool = True
+    bluesky_video_max_mb: int = 48
     # YouTube as a news source (opt-in). When enabled, the bot polls the public RSS
     # feed of YOUTUBE_CHANNEL_ID and queues new videos for moderation. The channel
     # re-uploads the same trailer under several video IDs, so items are deduped by a
@@ -199,6 +205,8 @@ def load_config() -> Config:
     enable_bluesky_source = _optional_bool("ENABLE_BLUESKY_SOURCE", False)
     bluesky_actor = os.getenv("BLUESKY_ACTOR", "marvelrivalsglobal.bsky.social").strip()
     bluesky_actor = bluesky_actor or "marvelrivalsglobal.bsky.social"
+    enable_bluesky_video_download = _optional_bool("ENABLE_BLUESKY_VIDEO_DOWNLOAD", True)
+    bluesky_video_max_mb = _optional_lenient_non_negative_int("BLUESKY_VIDEO_MAX_MB", 48) or 48
 
     enable_youtube_source = _optional_bool("ENABLE_YOUTUBE_SOURCE", False)
     youtube_channel_id = os.getenv("YOUTUBE_CHANNEL_ID", DEFAULT_YOUTUBE_CHANNEL_ID).strip()
@@ -258,6 +266,8 @@ def load_config() -> Config:
         moderation_send_interval_seconds=moderation_send_interval_seconds,
         enable_bluesky_source=enable_bluesky_source,
         bluesky_actor=bluesky_actor,
+        enable_bluesky_video_download=enable_bluesky_video_download,
+        bluesky_video_max_mb=bluesky_video_max_mb,
         enable_youtube_source=enable_youtube_source,
         youtube_channel_id=youtube_channel_id,
         youtube_exclude_keywords=youtube_exclude_keywords,
