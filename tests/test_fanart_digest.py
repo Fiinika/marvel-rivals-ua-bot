@@ -167,6 +167,25 @@ def test_run_once_skips_when_week_already_seen(monkeypatch) -> None:
     assert db.marked == []
 
 
+def test_run_once_force_bypasses_week_guard(monkeypatch) -> None:
+    # /fanartdigest force must build the digest even when the week is already seen.
+    _patch_fetch(monkeypatch, [_post("t3_1", "Art", "https://i.redd.it/1.jpg", "u/alice")])
+    sent: list[int] = []
+
+    async def _send(bot, config, db, submission_id):
+        sent.append(submission_id)
+
+    monkeypatch.setattr(fanart, "send_submission_to_moderation", _send)
+    db = _FakeDB(seen=True)
+    now = datetime(2026, 6, 12, 18, 0, tzinfo=_TZ)
+
+    created = asyncio.run(run_fanart_digest_once(bot=None, config=_config(), db=db, now=now, force=True))
+
+    assert created is True
+    assert sent == [42]
+    assert db.created is not None
+
+
 def test_run_once_skips_non_direct_image_posts(monkeypatch) -> None:
     # Gallery/video/external posts expose only a signed preview URL Telegram can't
     # fetch in an album, so they must be dropped (not break the whole digest).

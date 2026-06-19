@@ -8,7 +8,7 @@ from html import unescape
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import BaseFilter, Command, CommandStart
+from aiogram.filters import BaseFilter, Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from config import Config
@@ -29,6 +29,7 @@ from services.collectors.registry import (
     get_collector_definition,
     list_collector_definitions,
 )
+from services.digests.fanart import run_fanart_digest_once
 from services.formatter import format_admin_preview
 from services.i18n import t
 from services.post_footer import format_post_html, submission_allows_source_link
@@ -172,6 +173,32 @@ async def fetch_news(message: Message, bot: Bot, config: Config, db: Database) -
         t("admin.news_fetch.choose_source"),
         reply_markup=collector_source_keyboard(list_collector_definitions(config)),
     )
+
+
+@router.message(AdminOrPrivateChatFilter(), Command("fanartdigest"))
+async def fanart_digest_command(
+    message: Message, command: CommandObject, bot: Bot, config: Config, db: Database
+) -> None:
+    """Manually build this week's fan-art digest into the moderation queue. Pass
+    `force` to bypass the once-a-week guard (useful for testing)."""
+    if message.from_user is None or message.from_user.id not in config.admin_user_ids:
+        await message.answer(t("admin.fanart_digest.no_permission"))
+        return
+
+    if message.chat.id != config.admin_chat_id and _chat_type(message) != "private":
+        await message.answer(t("admin.fanart_digest.wrong_chat"))
+        return
+
+    force = (command.args or "").strip().casefold() == "force"
+    await message.answer(t("admin.fanart_digest.started"))
+    try:
+        created = await run_fanart_digest_once(bot, config, db, force=force)
+    except Exception:
+        logger.exception("Manual fan-art digest failed")
+        await message.answer(t("admin.fanart_digest.failed"))
+        return
+
+    await message.answer(t("admin.fanart_digest.queued") if created else t("admin.fanart_digest.skipped"))
 
 
 @router.callback_query(CollectorCallback.filter())

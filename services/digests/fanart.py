@@ -77,14 +77,18 @@ async def run_fanart_digest_once(
     db: Database,
     *,
     now: datetime | None = None,
+    force: bool = False,
 ) -> bool:
     """Build and queue this week's digest. Returns True when a submission was
-    created, False when it was skipped (already done this week, or no art found)."""
+    created, False when it was skipped (already done this week, or no art found).
+
+    ``force`` bypasses the per-week guard so an admin can trigger a digest on
+    demand (e.g. for testing) even if this week was already queued."""
     tz = _resolve_timezone(config.article_timezone)
     current = now or datetime.now(tz)
     week_key = _iso_week_key(current)
 
-    if await db.is_source_seen(SOURCE_TYPE, week_key):
+    if not force and await db.is_source_seen(SOURCE_TYPE, week_key):
         logger.info("Fan-art digest for %s already queued; skipping.", week_key)
         return False
 
