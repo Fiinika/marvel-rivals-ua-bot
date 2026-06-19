@@ -22,6 +22,13 @@ FOOTER_LINK_KEYS = (
     "post_footer.links.discord",
 )
 
+# A private-use marker placed in front of the appended community footer so its
+# position is found STRUCTURALLY, never by matching the visible title text. An
+# untrusted post body could otherwise contain that title to suppress or hijack the
+# footer. The sentinel is stripped from incoming text and from the final output,
+# so it never reaches Telegram.
+_FOOTER_SENTINEL = ""
+
 
 def format_community_footer() -> str:
     separator = t(FOOTER_SEPARATOR_KEY)
@@ -39,7 +46,7 @@ def format_community_footer() -> str:
 def format_community_footer_html() -> str:
     """The community footer as ready HTML (links applied) for callers that build
     their own HTML body and bypass format_post_html — e.g. the album digest caption."""
-    return _link_footer_items(escape(format_community_footer()))
+    return _link_footer_items(_FOOTER_SENTINEL + escape(format_community_footer()))
 
 
 def format_post_html(
@@ -56,7 +63,9 @@ def format_post_html(
         allow_source_link=allow_source_link,
         link_footer=include_community_footer,
     )
-    return rendered_body
+    # Belt-and-suspenders: the sentinel is consumed by _link_footer_items, but make
+    # absolutely sure it never reaches Telegram even on an unexpected path.
+    return rendered_body.replace(_FOOTER_SENTINEL, "")
 
 
 def submission_allows_source_link(part: dict) -> bool:
@@ -70,17 +79,14 @@ def submission_allows_source_link(part: dict) -> bool:
 
 
 def strip_community_footer(text: str) -> str:
-    separator = t(FOOTER_SEPARATOR_KEY)
-    title = t(FOOTER_TITLE_KEY)
-    title_index = text.find(title)
-    if title_index == -1:
+    """Remove the appended community-footer block, located by its structural
+    sentinel — never by matching the visible title, which an untrusted body could
+    contain. Text without the sentinel (i.e. anything we did not just footer) is
+    returned unchanged."""
+    index = text.find(_FOOTER_SENTINEL)
+    if index == -1:
         return text
-
-    prefix = text[:title_index].rstrip()
-    if separator and prefix.endswith(separator):
-        prefix = prefix[: -len(separator)].rstrip()
-
-    return prefix
+    return text[:index].rstrip()
 
 
 def _format_plain_link(key_prefix: str) -> str:
@@ -96,18 +102,21 @@ def _footer_link_url(key_prefix: str) -> str:
 
 
 def _prepare_body_text(text: str, *, include_community_footer: bool) -> str:
-    body = str(text or "").strip()
+    # Strip any sentinel an untrusted body might contain, so it cannot fake or move
+    # the footer marker we add below (the suppression/hijack vector).
+    body = str(text or "").replace(_FOOTER_SENTINEL, "").strip()
     if not include_community_footer:
-        return strip_community_footer(body).strip()
-
-    if _has_community_footer(body):
         return body
 
     footer = format_community_footer()
     if not footer:
         return body
 
-    return f"{body}\n\n{footer}" if body else footer
+    # The footer is ALWAYS appended fresh (the rendered output strips the sentinel
+    # and is never re-fed, so there is nothing to double-append), and is marked with
+    # the sentinel so _link_footer_items can find it structurally.
+    block = f"{_FOOTER_SENTINEL}{footer}"
+    return f"{body}\n\n{block}" if body else block
 
 
 def _format_body_html(
@@ -168,11 +177,6 @@ def _is_safe_http_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _has_community_footer(text: str) -> bool:
-    title = t(FOOTER_TITLE_KEY)
-    return bool(title and title in text)
-
-
 def _split_footer_label(label: str) -> tuple[str, str]:
     icon, separator, link_label = label.partition(" ")
     if not separator:
@@ -182,13 +186,14 @@ def _split_footer_label(label: str) -> tuple[str, str]:
 
 
 def _link_footer_items(rendered_html: str) -> str:
-    marker = escape(t(FOOTER_TITLE_KEY))
-    marker_index = rendered_html.find(marker)
+    # Locate the footer by the structural sentinel (placed just before it) rather
+    # than the visible title, and drop the sentinel from the output.
+    marker_index = rendered_html.find(_FOOTER_SENTINEL)
     if marker_index == -1:
         return rendered_html
 
     before_footer = rendered_html[:marker_index]
-    footer = rendered_html[marker_index:]
+    footer = rendered_html[marker_index + len(_FOOTER_SENTINEL):]
     for key_prefix in FOOTER_LINK_KEYS:
         url = _footer_link_url(key_prefix)
         if not url or not _is_safe_http_url(url):
