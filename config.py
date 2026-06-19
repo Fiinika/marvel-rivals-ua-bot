@@ -38,6 +38,11 @@ DEFAULT_REDDIT_EXCLUDE_KEYWORDS = frozenset({"megathread"})
 
 DEFAULT_RIVALSKINS_FEED_URL = "https://rivalskins.com/category/leaks/feed/"
 
+DEFAULT_WIKI_FACTS_API_URL = "https://marvelrivals.fandom.com/api.php"
+# Monday (Mon=0 .. Sun=6) at 12:00 local time (ARTICLE_TIMEZONE).
+DEFAULT_WIKI_FACTS_WEEKDAY = 0
+DEFAULT_WIKI_FACTS_HOUR = 12
+
 DEFAULT_FANART_SUBREDDIT = "MarvelRivals"
 DEFAULT_FANART_FLAIR = "Fan Art"
 # Friday (Mon=0 .. Sun=6) at 18:00 local time (ARTICLE_TIMEZONE).
@@ -145,6 +150,13 @@ class Config:
     # Reddit. Parsed leniently.
     enable_rivalskins_source: bool = False
     rivalskins_feed_url: str = DEFAULT_RIVALSKINS_FEED_URL
+    # Weekly "Чи знали ви?" hero-trivia rubric from the Marvel Rivals Fandom wiki
+    # (CC BY-SA). Each run translates one unseen Trivia fact to Ukrainian via Gemini
+    # and queues it for moderation. Runs on its own weekday/hour. Parsed leniently.
+    enable_wiki_facts: bool = False
+    wiki_facts_api_url: str = DEFAULT_WIKI_FACTS_API_URL
+    wiki_facts_weekday: int = DEFAULT_WIKI_FACTS_WEEKDAY
+    wiki_facts_hour: int = DEFAULT_WIKI_FACTS_HOUR
     # Weekly fan-art digest (opt-in): once a week the bot pulls the top "Fan Art"
     # posts of the past week from FANART_SUBREDDIT and queues ONE album post (the
     # top images + a credited caption) for moderation. Runs on its own weekday/hour
@@ -230,6 +242,11 @@ def load_config() -> Config:
     enable_rivalskins_source = _optional_bool("ENABLE_RIVALSKINS_SOURCE", False)
     rivalskins_feed_url = os.getenv("RIVALSKINS_FEED_URL", DEFAULT_RIVALSKINS_FEED_URL).strip() or DEFAULT_RIVALSKINS_FEED_URL
 
+    enable_wiki_facts = _optional_bool("ENABLE_WIKI_FACTS", False)
+    wiki_facts_api_url = os.getenv("WIKI_FACTS_API_URL", DEFAULT_WIKI_FACTS_API_URL).strip() or DEFAULT_WIKI_FACTS_API_URL
+    wiki_facts_weekday = _optional_weekday("WIKI_FACTS_WEEKDAY", DEFAULT_WIKI_FACTS_WEEKDAY)
+    wiki_facts_hour = _optional_hour("WIKI_FACTS_HOUR", DEFAULT_WIKI_FACTS_HOUR)
+
     enable_fanart_digest = _optional_bool("ENABLE_FANART_DIGEST", False)
     fanart_subreddit = os.getenv("FANART_SUBREDDIT", DEFAULT_FANART_SUBREDDIT).strip() or DEFAULT_FANART_SUBREDDIT
     fanart_flair = os.getenv("FANART_FLAIR", DEFAULT_FANART_FLAIR).strip() or DEFAULT_FANART_FLAIR
@@ -289,6 +306,10 @@ def load_config() -> Config:
         reddit_exclude_keywords=reddit_exclude_keywords,
         enable_rivalskins_source=enable_rivalskins_source,
         rivalskins_feed_url=rivalskins_feed_url,
+        enable_wiki_facts=enable_wiki_facts,
+        wiki_facts_api_url=wiki_facts_api_url,
+        wiki_facts_weekday=wiki_facts_weekday,
+        wiki_facts_hour=wiki_facts_hour,
         enable_fanart_digest=enable_fanart_digest,
         fanart_subreddit=fanart_subreddit,
         fanart_flair=fanart_flair,

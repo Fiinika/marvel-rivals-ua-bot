@@ -24,12 +24,16 @@ PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_news_
 SHORT_FORM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_shortform_uk.md"
 STYLE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "official_news_style.md"
 DEDUP_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_dedup_uk.md"
+WIKI_FACT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_wiki_fact_uk.md"
 POST_SEPARATOR = "---POST---"
 TAGS_SEPARATOR = "---TAGS---"
 OFFICIAL_SOURCE_TYPES = {"official_marvel_rivals"}
 # Sources whose items are unofficial leaks/datamines: the short-form draft must
 # frame them as rumours (чутки), never as confirmed/official statements.
 RUMOR_SOURCE_TYPES = {"reddit", "rivalskins"}
+# Sources that get the dedicated "Чи знали ви?" trivia prompt (translate + frame a
+# wiki fact) instead of the social short-form prompt.
+WIKI_FACT_SOURCE_TYPES = {"wiki_facts"}
 OFFICIAL_BASE_HASHTAGS = ["#MarvelRivalsUA", "#Офіційно"]
 OFFICIAL_SOURCE_ATTRIBUTION = "Повні деталі — на офіційному сайті."
 OFFICIAL_TOPIC_TAG_RULES = [
@@ -271,9 +275,12 @@ def _rumor_notice(draft_input: GeminiDraftInput) -> str:
 
 
 def _select_prompt_template(draft_input: GeminiDraftInput) -> str:
-    """Official articles use the long-form article prompt; every other (social /
-    short-form) source uses the concise short-form prompt. Both accept the same
-    format placeholders, so the kwargs in _build_prompt stay shared."""
+    """Wiki trivia uses the "Чи знали ви?" prompt; official articles use the
+    long-form article prompt; every other (social / short-form) source uses the
+    concise short-form prompt. All accept the same format placeholders, so the
+    kwargs in _build_prompt stay shared."""
+    if draft_input.source_type in WIKI_FACT_SOURCE_TYPES:
+        return _load_wiki_fact_prompt_template()
     if _is_official_source(draft_input):
         return _load_prompt_template()
 
@@ -839,6 +846,11 @@ def _load_prompt_template() -> str:
 @lru_cache(maxsize=1)
 def _load_short_form_prompt_template() -> str:
     return SHORT_FORM_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+@lru_cache(maxsize=1)
+def _load_wiki_fact_prompt_template() -> str:
+    return WIKI_FACT_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 @lru_cache(maxsize=1)

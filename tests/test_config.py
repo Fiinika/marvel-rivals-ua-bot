@@ -249,6 +249,25 @@ def test_reddit_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.reddit_flairs == ("Patch Notes", "Esports")
 
 
+def test_wiki_facts_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    for key in ("ENABLE_WIKI_FACTS", "WIKI_FACTS_WEEKDAY", "WIKI_FACTS_HOUR", "WIKI_FACTS_API_URL"):
+        monkeypatch.delenv(key, raising=False)
+    config = cfg.load_config()
+    assert config.enable_wiki_facts is False
+    assert config.wiki_facts_weekday == cfg.DEFAULT_WIKI_FACTS_WEEKDAY
+    assert config.wiki_facts_hour == cfg.DEFAULT_WIKI_FACTS_HOUR
+    assert config.wiki_facts_api_url == cfg.DEFAULT_WIKI_FACTS_API_URL
+
+    monkeypatch.setenv("ENABLE_WIKI_FACTS", "true")
+    monkeypatch.setenv("WIKI_FACTS_WEEKDAY", "3")
+    monkeypatch.setenv("WIKI_FACTS_HOUR", "9")
+    config = cfg.load_config()
+    assert config.enable_wiki_facts is True
+    assert config.wiki_facts_weekday == 3
+    assert config.wiki_facts_hour == 9
+
+
 def test_fanart_digest_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_env(monkeypatch)
     for key in (

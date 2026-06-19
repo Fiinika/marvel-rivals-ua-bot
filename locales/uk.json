@@ -82,6 +82,7 @@
     "collector_youtube": "YouTube",
     "collector_reddit": "Reddit (витоки)",
     "collector_rivalskins": "RivalSkins (скіни)",
+    "collector_wiki_facts": "Wiki-факти",
     "modlog_delete": "🗑 Видалити",
     "modlog_mute": "🔇 Мут 1 год",
     "modlog_ban": "⛔ Бан"
@@ -195,6 +196,15 @@
       "username": "rivalskins_leaks_collector",
       "errors": {
         "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор RivalSkins пропускає AI-генерацію чернеток."
+      }
+    },
+    "wiki_facts": {
+      "title": "Wiki-факти (Чи знали ви?)",
+      "source_name": "Marvel Rivals Wiki (CC BY-SA)",
+      "username": "wiki_facts_collector",
+      "fact_title": "Цікавий факт про {hero}",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Рубрика wiki-фактів пропускає AI-генерацію чернеток."
       }
     }
   },
