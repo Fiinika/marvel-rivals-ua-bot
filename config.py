@@ -36,6 +36,8 @@ DEFAULT_REDDIT_FLAIRS = ("Official News", "Reliable", "Confirmed")
 # substring of the title.
 DEFAULT_REDDIT_EXCLUDE_KEYWORDS = frozenset({"megathread"})
 
+DEFAULT_RIVALSKINS_FEED_URL = "https://rivalskins.com/category/leaks/feed/"
+
 DEFAULT_FANART_SUBREDDIT = "MarvelRivals"
 DEFAULT_FANART_FLAIR = "Fan Art"
 # Friday (Mon=0 .. Sun=6) at 18:00 local time (ARTICLE_TIMEZONE).
@@ -138,6 +140,11 @@ class Config:
     reddit_subreddit: str = DEFAULT_REDDIT_SUBREDDIT
     reddit_flairs: tuple[str, ...] = DEFAULT_REDDIT_FLAIRS
     reddit_exclude_keywords: frozenset[str] = DEFAULT_REDDIT_EXCLUDE_KEYWORDS
+    # rivalskins.com leaks as a news source (opt-in). Polls the site's leaks RSS
+    # feed and queues new skin-leak posts for moderation as RUMOURS (чутки), like
+    # Reddit. Parsed leniently.
+    enable_rivalskins_source: bool = False
+    rivalskins_feed_url: str = DEFAULT_RIVALSKINS_FEED_URL
     # Weekly fan-art digest (opt-in): once a week the bot pulls the top "Fan Art"
     # posts of the past week from FANART_SUBREDDIT and queues ONE album post (the
     # top images + a credited caption) for moderation. Runs on its own weekday/hour
@@ -220,6 +227,9 @@ def load_config() -> Config:
     reddit_flairs = _parse_flairs("REDDIT_FLAIRS", DEFAULT_REDDIT_FLAIRS)
     reddit_exclude_keywords = _parse_keyword_set("REDDIT_EXCLUDE_KEYWORDS", DEFAULT_REDDIT_EXCLUDE_KEYWORDS)
 
+    enable_rivalskins_source = _optional_bool("ENABLE_RIVALSKINS_SOURCE", False)
+    rivalskins_feed_url = os.getenv("RIVALSKINS_FEED_URL", DEFAULT_RIVALSKINS_FEED_URL).strip() or DEFAULT_RIVALSKINS_FEED_URL
+
     enable_fanart_digest = _optional_bool("ENABLE_FANART_DIGEST", False)
     fanart_subreddit = os.getenv("FANART_SUBREDDIT", DEFAULT_FANART_SUBREDDIT).strip() or DEFAULT_FANART_SUBREDDIT
     fanart_flair = os.getenv("FANART_FLAIR", DEFAULT_FANART_FLAIR).strip() or DEFAULT_FANART_FLAIR
@@ -277,6 +287,8 @@ def load_config() -> Config:
         reddit_subreddit=reddit_subreddit,
         reddit_flairs=reddit_flairs,
         reddit_exclude_keywords=reddit_exclude_keywords,
+        enable_rivalskins_source=enable_rivalskins_source,
+        rivalskins_feed_url=rivalskins_feed_url,
         enable_fanart_digest=enable_fanart_digest,
         fanart_subreddit=fanart_subreddit,
         fanart_flair=fanart_flair,

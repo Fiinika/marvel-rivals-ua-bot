@@ -29,7 +29,7 @@ TAGS_SEPARATOR = "---TAGS---"
 OFFICIAL_SOURCE_TYPES = {"official_marvel_rivals"}
 # Sources whose items are unofficial leaks/datamines: the short-form draft must
 # frame them as rumours (чутки), never as confirmed/official statements.
-RUMOR_SOURCE_TYPES = {"reddit"}
+RUMOR_SOURCE_TYPES = {"reddit", "rivalskins"}
 OFFICIAL_BASE_HASHTAGS = ["#MarvelRivalsUA", "#Офіційно"]
 OFFICIAL_SOURCE_ATTRIBUTION = "Повні деталі — на офіційному сайті."
 OFFICIAL_TOPIC_TAG_RULES = [

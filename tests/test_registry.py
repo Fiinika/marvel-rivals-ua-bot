@@ -16,7 +16,7 @@ from services.collectors.registry import (
 )
 
 
-def _config(bluesky: bool, youtube: bool = False, reddit: bool = False) -> SimpleNamespace:
+def _config(bluesky: bool, youtube: bool = False, reddit: bool = False, rivalskins: bool = False) -> SimpleNamespace:
     return SimpleNamespace(
         enable_bluesky_source=bluesky,
         bluesky_actor="marvelrivalsglobal.bsky.social",
@@ -27,6 +27,8 @@ def _config(bluesky: bool, youtube: bool = False, reddit: bool = False) -> Simpl
         reddit_subreddit="MarvelRivalsLeaks",
         reddit_flairs=("Official News", "Reliable", "Confirmed"),
         reddit_exclude_keywords=frozenset({"megathread"}),
+        enable_rivalskins_source=rivalskins,
+        rivalskins_feed_url="https://rivalskins.com/category/leaks/feed/",
         official_news_url="https://www.marvelrivals.com/news/",
         article_timezone="Europe/Kyiv",
     )
@@ -67,9 +69,21 @@ def test_reddit_create_respects_gate() -> None:
     assert collector.definition.collector_id == "reddit"
 
 
+def test_rivalskins_hidden_when_disabled_and_shown_when_enabled() -> None:
+    assert "rivalskins" not in {d.collector_id for d in list_collector_definitions(_config(False, rivalskins=False))}
+    assert "rivalskins" in {d.collector_id for d in list_collector_definitions(_config(False, rivalskins=True))}
+
+
+def test_rivalskins_create_respects_gate() -> None:
+    assert create_collector("rivalskins", config=_config(False, rivalskins=False), db=None, bot=None) is None
+    collector = create_collector("rivalskins", config=_config(False, rivalskins=True), db=None, bot=None)
+    assert collector is not None
+    assert collector.definition.collector_id == "rivalskins"
+
+
 def test_list_without_config_returns_all() -> None:
     ids = {d.collector_id for d in list_collector_definitions()}
-    assert {"official_marvel_rivals", "bluesky", "youtube", "reddit"} <= ids
+    assert {"official_marvel_rivals", "bluesky", "youtube", "reddit", "rivalskins"} <= ids
 
 
 def test_create_collector_respects_gate() -> None:

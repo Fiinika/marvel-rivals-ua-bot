@@ -73,6 +73,7 @@
     "collector_bluesky": "Bluesky",
     "collector_youtube": "YouTube",
     "collector_reddit": "Reddit (витоки)",
+    "collector_rivalskins": "RivalSkins (скіни)",
     "modlog_delete": "🗑 Видалити",
     "modlog_mute": "🔇 Мут 1 год",
     "modlog_ban": "⛔ Бан"
@@ -178,6 +179,14 @@
       "username": "reddit_leaks_collector",
       "errors": {
         "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор Reddit пропускає AI-генерацію чернеток."
+      }
+    },
+    "rivalskins": {
+      "title": "RivalSkins (витоки скінів)",
+      "source_name": "RivalSkins",
+      "username": "rivalskins_leaks_collector",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор RivalSkins пропускає AI-генерацію чернеток."
       }
     }
   },

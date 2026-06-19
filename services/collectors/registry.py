@@ -27,6 +27,10 @@ from services.collectors.reddit.collector import (
     DEFINITION as REDDIT_DEFINITION,
     RedditLeaksCollector,
 )
+from services.collectors.rivalskins.collector import (
+    DEFINITION as RIVALSKINS_DEFINITION,
+    RivalSkinsCollector,
+)
 from services.collectors.throttle import SubmissionThrottle
 from services.collectors.youtube.collector import (
     DEFINITION as YOUTUBE_DEFINITION,
@@ -65,6 +69,11 @@ _COLLECTORS: dict[str, tuple[CollectorDefinition, CollectorFactory, CollectorEna
         REDDIT_DEFINITION,
         RedditLeaksCollector,
         lambda config: config.enable_reddit_source,
+    ),
+    RIVALSKINS_DEFINITION.collector_id: (
+        RIVALSKINS_DEFINITION,
+        RivalSkinsCollector,
+        lambda config: config.enable_rivalskins_source,
     ),
 }
 
