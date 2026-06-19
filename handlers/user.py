@@ -43,6 +43,17 @@ async def submit_text(message: Message, bot: Bot, config: Config, db: Database) 
         return
 
     message_type = "link" if _contains_link(message) else "text"
+    # Bounce one- or two-word junk ("ы", "тест") before it reaches the queue. Only
+    # plain text is checked: a link or a media caption carries content of its own.
+    if message_type == "text" and _is_too_short_text(message, config):
+        await message.answer(t("user.too_short"))
+        logger.info(
+            "Rejected too-short submission from user %s: %r",
+            message.from_user.id if message.from_user else "unknown",
+            message.text,
+        )
+        return
+
     await _create_and_send_submission(
         message=message,
         bot=bot,
@@ -168,6 +179,28 @@ async def _create_and_send_submission(
 def _chat_type(message: Message) -> str:
     chat_type = message.chat.type
     return getattr(chat_type, "value", chat_type)
+
+
+def _is_too_short_text(message: Message, config: Config) -> bool:
+    """Whether a plain-text submission is too short to be a real news tip.
+
+    Rejected when it has fewer than the configured minimum words OR characters.
+    Admins are exempt (so the operator can test), as is any check whose threshold
+    is set to 0.
+    """
+    user = message.from_user
+    if user is not None and user.id in config.admin_user_ids:
+        return False
+
+    text = (message.text or "").strip()
+    min_words = config.min_submission_text_words
+    min_chars = config.min_submission_text_chars
+
+    if min_words > 0 and len(text.split()) < min_words:
+        return True
+    if min_chars > 0 and len(text) < min_chars:
+        return True
+    return False
 
 
 def _contains_link(message: Message) -> bool:

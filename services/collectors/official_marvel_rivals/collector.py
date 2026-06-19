@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from datetime import datetime, time, timezone
 
 from aiogram import Bot
 
 from config import Config
 from database import Database
-from services.collectors.base import CollectionMode, CollectionStats, CollectorDefinition, empty_stats
+from services.collectors.base import CollectorDefinition, DraftCandidate, ListingEntry
+from services.collectors.runner import BaseNewsCollector
 from services.collectors.official_marvel_rivals.article_parser import ArticleParser, ParsedArticle
 from services.collectors.official_marvel_rivals.news_fetcher import NewsArticleSummary, OfficialNewsFetcher
 from services.date_utils import build_utc_time_conversion_notes
-from services.gemini import GeminiDraftGenerator, GeminiDraftInput
 from services.i18n import t
-from services.moderation import send_submission_to_moderation
 
 
 logger = logging.getLogger(__name__)
@@ -30,231 +27,50 @@ DEFINITION = CollectorDefinition(
 )
 
 
-@dataclass(frozen=True)
-class ParsedArticleCandidate:
-    summary: NewsArticleSummary
-    article: ParsedArticle
-    source_id: str
-    source_url: str
-
-
-class OfficialMarvelRivalsCollector:
+class OfficialMarvelRivalsCollector(BaseNewsCollector):
     definition = DEFINITION
+    # The official site is the authoritative, full-detail source; never let it be
+    # suppressed as a cross-source duplicate of a shorter social-media post.
+    participates_in_cross_source_dedup = False
 
     def __init__(self, *, config: Config, db: Database, bot: Bot) -> None:
-        self.config = config
-        self.db = db
-        self.bot = bot
+        super().__init__(config=config, db=db, bot=bot)
         self.fetcher = OfficialNewsFetcher(config.official_news_url)
         self.parser = ArticleParser(config.article_timezone)
 
-    async def run_once(self, mode: CollectionMode = CollectionMode.MANUAL_LATEST) -> CollectionStats:
-        stats = empty_stats(self.definition)
+    def missing_gemini_warning(self) -> str:
+        return t("collectors.official_marvel_rivals.errors.missing_gemini_api_key")
+
+    async def fetch_listing(self) -> list[ListingEntry]:
         summaries = await self.fetcher.fetch_recent_articles()
-        stats.found = len(summaries)
+        return [ListingEntry(dedup_key=summary.canonical_url, payload=summary) for summary in summaries]
 
-        if not summaries:
-            logger.warning("Official Marvel Rivals news collector found no articles")
-            return stats
-
-        if not self.config.gemini_api_key:
-            warning = t("collectors.official_marvel_rivals.errors.missing_gemini_api_key")
-            logger.warning("GEMINI_API_KEY is missing. Skipping official Marvel Rivals AI draft generation.")
-            stats.errors.append(warning)
-            await self._count_seen_and_new_without_gemini(summaries, stats, mode=mode)
-            return stats
-
-        generator = GeminiDraftGenerator(self.config.gemini_api_key, self.config.gemini_model)
-        latest_seen_article_date = None
-        if mode == CollectionMode.SCHEDULED_SINCE_LAST:
-            latest_seen_article_date = await self.db.get_latest_seen_article_date(SOURCE_TYPE)
-
-        if mode == CollectionMode.MANUAL_LATEST:
-            candidate = await self._find_latest_unseen_candidate(summaries, stats)
-            if candidate is not None:
-                await self._create_moderation_submissions(candidate, generator, stats)
-            return stats
-
-        for summary in summaries:
-            candidate = await self._parse_candidate_if_needed(
-                summary,
-                stats,
-                latest_seen_article_date=latest_seen_article_date,
-            )
-            if candidate is None:
-                continue
-
-            await self._create_moderation_submissions(candidate, generator, stats)
-
-        return stats
-
-    async def _count_seen_and_new_without_gemini(
-        self,
-        summaries: list[NewsArticleSummary],
-        stats: CollectionStats,
-        mode: CollectionMode,
-    ) -> None:
-        for summary in summaries:
-            if await self.db.is_source_seen(SOURCE_TYPE, summary.canonical_url):
-                stats.duplicates += 1
-            else:
-                stats.new += 1
-                if mode == CollectionMode.MANUAL_LATEST:
-                    break
-
-    async def _find_latest_unseen_candidate(
-        self,
-        summaries: list[NewsArticleSummary],
-        stats: CollectionStats,
-    ) -> ParsedArticleCandidate | None:
-        for summary in summaries:
-            candidate = await self._parse_candidate_if_needed(
-                summary,
-                stats,
-                latest_seen_article_date=None,
-            )
-            if candidate is not None:
-                return candidate
-
-        return None
-
-    async def _parse_candidate_if_needed(
-        self,
-        summary: NewsArticleSummary,
-        stats: CollectionStats,
-        latest_seen_article_date: str | None,
-    ) -> ParsedArticleCandidate | None:
-        if await self.db.is_source_seen(SOURCE_TYPE, summary.canonical_url):
-            stats.duplicates += 1
-            return None
-
+    async def parse_entry(self, entry: ListingEntry) -> DraftCandidate:
+        summary: NewsArticleSummary = entry.payload  # type: ignore[assignment]
         article = await self.parser.fetch_and_parse(summary)
         source_id = article.canonical_url or summary.canonical_url
         source_url = article.canonical_url or article.article_url
-
-        if source_id != summary.canonical_url and await self.db.is_source_seen(SOURCE_TYPE, source_id):
-            stats.duplicates += 1
-            return None
-
-        if latest_seen_article_date and not _is_newer_or_same_article_date(
-            article.date_info.article_date if article.date_info is not None else None,
-            latest_seen_article_date,
-        ):
-            return None
-
-        stats.new += 1
-        return ParsedArticleCandidate(
-            summary=summary,
-            article=article,
-            source_id=source_id,
-            source_url=source_url,
+        has_media = bool(article.media_url and article.media_type == "photo")
+        article_date = article.date_info.article_date if article.date_info is not None else None
+        article_date_display = (
+            article.date_info.article_date_display if article.date_info is not None else None
         )
 
-    async def _create_moderation_submissions(
-        self,
-        candidate: ParsedArticleCandidate,
-        generator: GeminiDraftGenerator,
-        stats: CollectionStats,
-    ) -> bool:
-        article = candidate.article
-        source_id = candidate.source_id
-        source_url = candidate.source_url
-        try:
-            has_photo = bool(article.media_url and article.media_type == "photo")
-            max_part_length = 900 if has_photo else 1600
-            datetime_notes = build_utc_time_conversion_notes(
-                article.body_text or article.raw_excerpt or "",
-                article_date=article.date_info.article_date if article.date_info is not None else None,
-                target_timezone=self.config.article_timezone,
-            )
-            draft_package = await generator.generate_draft_package(
-                GeminiDraftInput(
-                    title=article.title,
-                    article_url=source_url,
-                    article_date_display=(
-                        article.date_info.article_date_display if article.date_info is not None else None
-                    ),
-                    datetime_notes=datetime_notes,
-                    body_text=article.body_text or article.raw_excerpt or "",
-                    source_type=SOURCE_TYPE,
-                    source_name=t("collectors.official_marvel_rivals.source_name"),
-                ),
-                max_part_length=max_part_length,
-            )
-            draft_parts = draft_package.draft_parts
-            stats.drafts_created += len(draft_parts)
-        except Exception as exc:
-            stats.failed += 1
-            message = t("collector_report.gemini_failed", url=source_url, error=exc)
-            stats.errors.append(message)
-            logger.exception("Gemini failed for %s", source_url)
-            return False
-
-        try:
-            has_media = bool(article.media_url and article.media_type == "photo")
-            submission_id = await self.db.create_ai_news_submission(
-                username=t("collectors.official_marvel_rivals.username"),
-                original_text=_build_original_text(article, source_url, self.config.article_timezone),
-                draft_text=draft_parts[0],
-                draft_parts=draft_parts,
-                message_type="photo" if has_media else "text",
-                media_url=article.media_url if has_media else None,
-                media_type=article.media_type if has_media else "none",
-                source_type=SOURCE_TYPE,
-                source_id=source_id,
-                source_url=source_url,
-                article_date=article.date_info.article_date if article.date_info is not None else None,
-                article_date_display=(
-                    article.date_info.article_date_display if article.date_info is not None else None
-                ),
-                tags=draft_package.tags,
-                additional_media_urls=list(article.media_urls[1:]) if has_media else None,
-            )
-            await send_submission_to_moderation(self.bot, self.config, self.db, submission_id)
-            stats.sent_to_moderation += 1
-        except Exception as exc:
-            stats.failed += 1
-            message = t("collector_report.moderation_send_failed", url=source_url, error=exc)
-            stats.errors.append(message)
-            logger.exception("Failed to send official news article to moderation: %s", source_url)
-            return False
-
-        await self.db.mark_source_seen(
-            source_type=SOURCE_TYPE,
+        return DraftCandidate(
             source_id=source_id,
             source_url=source_url,
             title=article.title,
-            article_date=article.date_info.article_date if article.date_info is not None else None,
+            body_text=article.body_text or article.raw_excerpt or "",
+            source_name=t("collectors.official_marvel_rivals.source_name"),
+            username=t("collectors.official_marvel_rivals.username"),
+            original_text=_build_original_text(article, source_url, self.config.article_timezone),
+            article_date=article_date,
+            article_date_display=article_date_display,
+            has_media=has_media,
+            media_url=article.media_url,
+            media_type=article.media_type,
+            additional_media_urls=list(article.media_urls[1:]) if has_media else None,
         )
-        logger.info("Created moderation draft for official Marvel Rivals article %s", source_url)
-        return True
-
-
-def _is_newer_or_same_article_date(article_date: str | None, latest_seen_article_date: str) -> bool:
-    if article_date is None:
-        return True
-
-    parsed_article_date = _parse_sortable_article_date(article_date)
-    parsed_latest_date = _parse_sortable_article_date(latest_seen_article_date)
-    if parsed_article_date is None or parsed_latest_date is None:
-        return True
-
-    return parsed_article_date >= parsed_latest_date
-
-
-def _parse_sortable_article_date(value: str) -> datetime | None:
-    try:
-        if "T" in value:
-            parsed = datetime.fromisoformat(value)
-        else:
-            parsed = datetime.combine(datetime.fromisoformat(value).date(), time.min)
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-
-    return parsed.astimezone(timezone.utc)
 
 
 def _build_original_text(article: ParsedArticle, source_url: str, article_timezone: str) -> str:

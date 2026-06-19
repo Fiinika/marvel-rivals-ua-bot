@@ -155,11 +155,19 @@ def _extract_article_title(original_text: str) -> str | None:
     return None
 
 
-def _format_source_label(source_type: str) -> str:
-    if source_type == "official_marvel_rivals":
-        return "Official Marvel Rivals"
+SOURCE_LABELS = {
+    "official_marvel_rivals": "Official Marvel Rivals",
+    "bluesky": "Bluesky",
+    "youtube": "YouTube",
+    "reddit": "Reddit",
+}
 
-    return source_type or t("formatter.none")
+
+def _format_source_label(source_type: str) -> str:
+    if not source_type:
+        return t("formatter.none")
+
+    return SOURCE_LABELS.get(source_type) or source_type.replace("_", " ").title()
 
 
 def _detect_source_category(tags: object | None) -> str:

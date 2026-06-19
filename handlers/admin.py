@@ -8,7 +8,7 @@ from html import unescape
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import BaseFilter, Command, CommandStart
+from aiogram.filters import BaseFilter, Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from config import Config
@@ -29,11 +29,13 @@ from services.collectors.registry import (
     get_collector_definition,
     list_collector_definitions,
 )
+from services.digests.fanart import run_fanart_digest_once
 from services.formatter import format_admin_preview
 from services.i18n import t
-from services.post_footer import format_post_html
+from services.post_footer import format_post_html, submission_allows_source_link
 from services.publisher import (
     DISABLED_LINK_PREVIEW,
+    DOWNLOAD_VIDEO_SOURCE_TYPES,
     PublishingError,
     TELEGRAM_CAPTION_LIMIT,
     TELEGRAM_TEXT_LIMIT,
@@ -169,8 +171,34 @@ async def fetch_news(message: Message, bot: Bot, config: Config, db: Database) -
 
     await message.answer(
         t("admin.news_fetch.choose_source"),
-        reply_markup=collector_source_keyboard(list_collector_definitions()),
+        reply_markup=collector_source_keyboard(list_collector_definitions(config)),
     )
+
+
+@router.message(AdminOrPrivateChatFilter(), Command("fanartdigest"))
+async def fanart_digest_command(
+    message: Message, command: CommandObject, bot: Bot, config: Config, db: Database
+) -> None:
+    """Manually build this week's fan-art digest into the moderation queue. Pass
+    `force` to bypass the once-a-week guard (useful for testing)."""
+    if message.from_user is None or message.from_user.id not in config.admin_user_ids:
+        await message.answer(t("admin.fanart_digest.no_permission"))
+        return
+
+    if message.chat.id != config.admin_chat_id and _chat_type(message) != "private":
+        await message.answer(t("admin.fanart_digest.wrong_chat"))
+        return
+
+    force = (command.args or "").strip().casefold() == "force"
+    await message.answer(t("admin.fanart_digest.started"))
+    try:
+        created = await run_fanart_digest_once(bot, config, db, force=force)
+    except Exception:
+        logger.exception("Manual fan-art digest failed")
+        await message.answer(t("admin.fanart_digest.failed"))
+        return
+
+    await message.answer(t("admin.fanart_digest.queued") if created else t("admin.fanart_digest.skipped"))
 
 
 @router.callback_query(CollectorCallback.filter())
@@ -578,6 +606,20 @@ async def _start_edit(
 
     if submission["status"] != STATUS_PENDING:
         await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
+        return
+
+    # Album digests (one grouped post) and native-video posts (YouTube, or a
+    # downloaded Bluesky video) are not edited in place — the per-part edit flow
+    # can't edit a media group / video message's text — so admins approve or
+    # reject them as a whole.
+    message_type = str(submission.get("message_type") or "")
+    source_type = str(submission.get("source_type") or "")
+    if (
+        message_type == "album"
+        or source_type == "youtube"
+        or (message_type == "video" and source_type in DOWNLOAD_VIDEO_SOURCE_TYPES)
+    ):
+        await _answer_callback(callback, t("admin.alert.media_post_edit_unsupported"), show_alert=True)
         return
 
     parts = submission.get("parts", [])
@@ -1003,7 +1045,7 @@ def _format_part_for_moderation(text: str, part: dict | None = None) -> str:
     return format_post_html(
         text,
         source_url=str(part.get("source_url") or ""),
-        allow_source_link=_is_official_source_part(part),
+        allow_source_link=submission_allows_source_link(part),
         include_community_footer=True,
     )
 
@@ -1041,10 +1083,6 @@ def _part_has_media(part: dict) -> bool:
 
 def _media_type_for(message_type: str) -> str:
     return message_type if message_type in {"photo", "video", "document"} else "none"
-
-
-def _is_official_source_part(part: dict) -> bool:
-    return str(part.get("source_type") or "") == "official_marvel_rivals"
 
 
 async def _update_admin_preview(

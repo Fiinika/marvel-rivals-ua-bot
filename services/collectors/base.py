@@ -42,6 +42,38 @@ class CollectionStats:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ListingEntry:
+    """A lightweight listing entry produced before the full article is fetched.
+
+    ``dedup_key`` is the source-scoped identifier used for the first
+    ``is_source_seen`` check; ``payload`` carries the source-specific summary
+    object that ``parse_entry`` needs to fetch and parse the full item.
+    """
+
+    dedup_key: str
+    payload: object = None
+
+
+@dataclass(frozen=True)
+class DraftCandidate:
+    """Normalized, source-agnostic input for one moderation submission."""
+
+    source_id: str
+    source_url: str
+    title: str
+    body_text: str
+    source_name: str
+    username: str
+    original_text: str
+    article_date: str | None = None
+    article_date_display: str | None = None
+    has_media: bool = False
+    media_url: str | None = None
+    media_type: str = "none"
+    additional_media_urls: list[str] | None = None
+
+
 class NewsCollector(Protocol):
     definition: CollectorDefinition
 

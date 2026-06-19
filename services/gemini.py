@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -10,12 +12,28 @@ from pathlib import Path
 from services.i18n import t
 
 
+# Gemini's free tier throttles by requests-per-minute; a burst (e.g. several
+# dedup + draft calls in one scheduler tick) trips a 429 that is transient. Retry
+# it a few times with a bounded backoff so one throttle doesn't drop a draft.
+_GEMINI_MAX_ATTEMPTS = 3
+_GEMINI_MAX_RETRY_DELAY_SECONDS = 20.0
+
+
 logger = logging.getLogger(__name__)
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_news_uk.md"
+SHORT_FORM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_shortform_uk.md"
 STYLE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "official_news_style.md"
+DEDUP_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_dedup_uk.md"
+WIKI_FACT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gemini_wiki_fact_uk.md"
 POST_SEPARATOR = "---POST---"
 TAGS_SEPARATOR = "---TAGS---"
 OFFICIAL_SOURCE_TYPES = {"official_marvel_rivals"}
+# Sources whose items are unofficial leaks/datamines: the short-form draft must
+# frame them as rumours (чутки), never as confirmed/official statements.
+RUMOR_SOURCE_TYPES = {"reddit", "rivalskins"}
+# Sources that get the dedicated "Чи знали ви?" trivia prompt (translate + frame a
+# wiki fact) instead of the social short-form prompt.
+WIKI_FACT_SOURCE_TYPES = {"wiki_facts"}
 OFFICIAL_BASE_HASHTAGS = ["#MarvelRivalsUA", "#Офіційно"]
 OFFICIAL_SOURCE_ATTRIBUTION = "Повні деталі — на офіційному сайті."
 OFFICIAL_TOPIC_TAG_RULES = [
@@ -92,6 +110,12 @@ class GeminiDraftPackage:
     tags: list[str]
 
 
+@dataclass(frozen=True)
+class DuplicateVerdict:
+    is_duplicate: bool
+    matched_title: str | None = None
+
+
 class GeminiDraftGenerator:
     def __init__(self, api_key: str, model: str) -> None:
         self.api_key = api_key
@@ -110,7 +134,13 @@ class GeminiDraftGenerator:
         prompt = _build_prompt(draft_input)
         try:
             draft = await asyncio.to_thread(self._generate_sync, prompt)
+        except GeminiDraftError:
+            raise
         except Exception as exc:
+            if _is_rate_limit_error(exc):
+                raise GeminiDraftError(
+                    "Gemini вичерпав ліміт запитів (rate limit). Спробуйте ще раз за хвилину."
+                ) from exc
             raise GeminiDraftError("Gemini draft generation failed") from exc
 
         draft = _clean_response_text(draft)
@@ -139,23 +169,77 @@ class GeminiDraftGenerator:
         drafts = await self.generate_drafts(draft_input, max_part_length=3500)
         return drafts[0]
 
+    async def find_duplicate_title(self, new_title: str, existing_titles: list[str]) -> DuplicateVerdict:
+        """Ask Gemini whether ``new_title`` is the same specific story as any of
+        ``existing_titles``. Returns a not-duplicate verdict when there is nothing
+        meaningful to compare; raises GeminiDraftError if the model call fails."""
+        candidate = (new_title or "").strip()
+        known = [title.strip() for title in existing_titles if title and title.strip()]
+        if not candidate or not known:
+            return DuplicateVerdict(is_duplicate=False)
+
+        prompt = _build_dedup_prompt(candidate, known)
+        raw = await asyncio.to_thread(self._generate_sync, prompt)
+        return _parse_duplicate_verdict(raw, known)
+
     def _generate_sync(self, prompt: str) -> str:
         try:
             from google import genai
+            from google.genai import errors as genai_errors
         except ImportError as exc:
             raise GeminiDraftError("google-genai is not installed") from exc
 
         client = genai.Client(api_key=self.api_key)
-        response = client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return getattr(response, "text", "") or ""
+        for attempt in range(_GEMINI_MAX_ATTEMPTS):
+            try:
+                response = client.models.generate_content(model=self.model, contents=prompt)
+                return getattr(response, "text", "") or ""
+            except genai_errors.APIError as exc:
+                if attempt >= _GEMINI_MAX_ATTEMPTS - 1 or not _is_retryable_gemini_error(exc):
+                    raise
+                delay = _gemini_retry_delay_seconds(exc, attempt)
+                logger.warning(
+                    "Gemini call throttled/unavailable (%s); retrying in %.0fs (attempt %s/%s)",
+                    getattr(exc, "code", "?"),
+                    delay,
+                    attempt + 1,
+                    _GEMINI_MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+        # Unreachable: the final attempt either returns or re-raises above.
+        raise GeminiDraftError("Gemini call exhausted all retries")
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    code = getattr(exc, "code", None)
+    return code == 429 or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    """Retry per-minute rate limits (429) and transient server errors (500/503),
+    but NOT a per-DAY free-tier cap — that won't clear on a short retry, so failing
+    fast gives a clear message instead of stalling for nothing."""
+    text = str(exc)
+    if "PerDay" in text or "RequestsPerDay" in text:
+        return False
+    code = getattr(exc, "code", None)
+    if code in {429, 500, 503}:
+        return True
+    return any(marker in text for marker in ("RESOURCE_EXHAUSTED", "UNAVAILABLE", "INTERNAL"))
+
+
+def _gemini_retry_delay_seconds(exc: Exception, attempt: int) -> float:
+    """Honour the API's suggested retryDelay when present (capped), else use a
+    bounded exponential backoff."""
+    match = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)", str(exc))
+    if match:
+        return min(float(match.group(1)) + 1.0, _GEMINI_MAX_RETRY_DELAY_SECONDS)
+    return min(8.0 * (attempt + 1), _GEMINI_MAX_RETRY_DELAY_SECONDS)
 
 
 def _build_prompt(draft_input: GeminiDraftInput) -> str:
     source_line = _source_attribution_line(draft_input)
-    return _load_prompt_template().format(
+    return _select_prompt_template(draft_input).format(
         style_prompt=_load_style_prompt(),
         source_type=draft_input.source_type,
         source_name=draft_input.source_name,
@@ -167,18 +251,104 @@ def _build_prompt(draft_input: GeminiDraftInput) -> str:
         hashtag_line=_public_hashtag_line(draft_input),
         datetime_notes=draft_input.datetime_notes or "UTC/GMT-часів для конвертації не знайдено.",
         body_text=draft_input.body_text or t("gemini.fallback_body"),
+        rumor_notice=_rumor_notice(draft_input),
     )
+
+
+def _is_rumor_source(draft_input: GeminiDraftInput) -> bool:
+    return draft_input.source_type in RUMOR_SOURCE_TYPES
+
+
+def _rumor_notice(draft_input: GeminiDraftInput) -> str:
+    """A strong, source-scoped instruction for leak/datamine sources so the draft
+    is framed as a rumour. Empty for every other source (the placeholder then
+    renders as nothing)."""
+    if not _is_rumor_source(draft_input):
+        return ""
+
+    return (
+        "УВАГА: це НЕОФІЦІЙНИЙ злив/витік (датамайн або чутка), НЕ підтверджений розробниками. "
+        "Обов'язково познач це в тексті як чутку/неофіційну інформацію (напр. «за чутками», "
+        "«за даними датамайну», «неофіційно») і коротко нагадай, що деталі ще можуть змінитися. "
+        "Не подавай це як офіційну заяву чи підтверджений факт."
+    )
+
+
+def _select_prompt_template(draft_input: GeminiDraftInput) -> str:
+    """Wiki trivia uses the "Чи знали ви?" prompt; official articles use the
+    long-form article prompt; every other (social / short-form) source uses the
+    concise short-form prompt. All accept the same format placeholders, so the
+    kwargs in _build_prompt stay shared."""
+    if draft_input.source_type in WIKI_FACT_SOURCE_TYPES:
+        return _load_wiki_fact_prompt_template()
+    if _is_official_source(draft_input):
+        return _load_prompt_template()
+
+    return _load_short_form_prompt_template()
 
 
 def _clean_response_text(value: str) -> str:
     return value.strip().strip("`").strip()
 
 
+def _build_dedup_prompt(new_title: str, existing_titles: list[str]) -> str:
+    numbered = "\n".join(f"{index}. {title}" for index, title in enumerate(existing_titles, start=1))
+    return _load_dedup_prompt_template().format(new_title=new_title, existing_titles=numbered)
+
+
+@lru_cache(maxsize=1)
+def _load_dedup_prompt_template() -> str:
+    return DEDUP_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _coerce_duplicate_flag(value: object) -> bool:
+    """Interpret the model's ``duplicate`` field, biased toward not-a-duplicate.
+
+    A genuine JSON ``true``/``1`` counts as a duplicate; everything else —
+    including the common stringified ``"false"``/``"no"``/``"0"`` deviations —
+    is treated as NOT a duplicate, so a formatting quirk never drops real news.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1"}
+    return False
+
+
+def _parse_duplicate_verdict(raw: str, known_titles: list[str]) -> DuplicateVerdict:
+    """Parse the model's JSON verdict, failing open (not a duplicate) on anything
+    unexpected — a missed dedup only costs a rare double post, but a false positive
+    would silently drop real news."""
+    text = _clean_response_text(raw)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return DuplicateVerdict(is_duplicate=False)
+
+    try:
+        data = json.loads(match.group(0))
+    except (ValueError, TypeError):
+        return DuplicateVerdict(is_duplicate=False)
+
+    if not isinstance(data, dict) or not _coerce_duplicate_flag(data.get("duplicate")):
+        return DuplicateVerdict(is_duplicate=False)
+
+    matched = data.get("match")
+    matched_title: str | None = None
+    if isinstance(matched, str) and matched.strip():
+        lowered = matched.strip().lower()
+        matched_title = next((title for title in known_titles if title.lower() == lowered), matched.strip())
+
+    return DuplicateVerdict(is_duplicate=True, matched_title=matched_title)
+
+
 def _ensure_required_metadata(draft: str, draft_input: GeminiDraftInput) -> str:
+    # Short-form (non-official) posts deliberately carry NO publication-date line:
+    # the post itself is the announcement, and a bare "2026-06-12" mid-post reads
+    # as noise. The article date stays available to admins via the original_text.
     result = _clean_model_draft(draft, draft_input).strip()
     result = _apply_datetime_notes(result, draft_input.datetime_notes)
-    if draft_input.article_date_display and t("gemini.date_marker") not in result:
-        result = _insert_after_first_line(result, draft_input.article_date_display)
 
     source_line = _source_attribution_line(draft_input)
     if source_line and not _has_source_attribution(result):
@@ -300,17 +470,19 @@ def _sanitize_official_public_draft(draft: str, draft_input: GeminiDraftInput) -
 
 
 def _public_hashtag_line(draft_input: GeminiDraftInput) -> str:
-    if not _is_official_source(draft_input):
-        return t("gemini.hashtags")
+    if _is_official_source(draft_input):
+        return " ".join(_official_hashtags(draft_input))
 
-    return " ".join(_official_hashtags(draft_input))
+    # Non-official (social/short-form) posts get the base tag PLUS the same topic
+    # tags, just without the #Офіційно marker, so they are tagged too — not bare.
+    return " ".join([t("gemini.hashtags"), *_topic_hashtags(draft_input)])
 
 
 def _official_database_tags(draft_input: GeminiDraftInput) -> list[str]:
     return [tag.lstrip("#") for tag in _official_hashtags(draft_input)]
 
 
-def _official_hashtags(draft_input: GeminiDraftInput) -> list[str]:
+def _topic_hashtags(draft_input: GeminiDraftInput) -> list[str]:
     text = f"{draft_input.title}\n{draft_input.body_text}".lower()
     topic_tags: list[str] = []
     for keywords, hashtag in OFFICIAL_TOPIC_TAG_RULES:
@@ -324,7 +496,11 @@ def _official_hashtags(draft_input: GeminiDraftInput) -> list[str]:
     if not topic_tags:
         topic_tags.append("#Анонс")
 
-    return [*OFFICIAL_BASE_HASHTAGS, *topic_tags[:3]]
+    return topic_tags[:3]
+
+
+def _official_hashtags(draft_input: GeminiDraftInput) -> list[str]:
+    return [*OFFICIAL_BASE_HASHTAGS, *_topic_hashtags(draft_input)]
 
 
 def _official_post_type(draft_input: GeminiDraftInput) -> str:
@@ -356,11 +532,7 @@ def _source_attribution_line(draft_input: GeminiDraftInput) -> str:
     if _is_official_source(draft_input):
         return OFFICIAL_SOURCE_ATTRIBUTION
 
-    return t(
-        "gemini.source_line",
-        source_name=draft_input.source_name,
-        url=draft_input.article_url,
-    )
+    return t("gemini.source_line", source_name=draft_input.source_name)
 
 
 def _has_source_attribution(text: str) -> bool:
@@ -579,16 +751,6 @@ def _is_hashtag_only_line(value: str) -> bool:
     return bool(value.startswith("#") and re.fullmatch(r"(?:#[^\s#]+)(?:\s+#[^\s#]+)*", value))
 
 
-def _insert_after_first_line(text: str, inserted_line: str) -> str:
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip():
-            lines[index + 1:index + 1] = ["", inserted_line]
-            return "\n".join(lines)
-
-    return inserted_line
-
-
 def _normalize_blank_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -679,6 +841,16 @@ def _prefix_part(part: str, number: int) -> str:
 @lru_cache(maxsize=1)
 def _load_prompt_template() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+@lru_cache(maxsize=1)
+def _load_short_form_prompt_template() -> str:
+    return SHORT_FORM_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+@lru_cache(maxsize=1)
+def _load_wiki_fact_prompt_template() -> str:
+    return WIKI_FACT_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 @lru_cache(maxsize=1)
