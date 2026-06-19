@@ -1,0 +1,1 @@
+"""YouTube news collector package."""

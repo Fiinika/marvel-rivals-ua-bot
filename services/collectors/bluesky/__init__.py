@@ -1,0 +1,1 @@
+"""Bluesky news collector package."""

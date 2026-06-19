@@ -31,7 +31,7 @@ from services.collectors.registry import (
 )
 from services.formatter import format_admin_preview
 from services.i18n import t
-from services.post_footer import format_post_html
+from services.post_footer import format_post_html, submission_allows_source_link
 from services.publisher import (
     DISABLED_LINK_PREVIEW,
     PublishingError,
@@ -169,7 +169,7 @@ async def fetch_news(message: Message, bot: Bot, config: Config, db: Database) -
 
     await message.answer(
         t("admin.news_fetch.choose_source"),
-        reply_markup=collector_source_keyboard(list_collector_definitions()),
+        reply_markup=collector_source_keyboard(list_collector_definitions(config)),
     )
 
 
@@ -578,6 +578,13 @@ async def _start_edit(
 
     if submission["status"] != STATUS_PENDING:
         await _answer_callback(callback, t("admin.alert.submission_already_processed"), show_alert=True)
+        return
+
+    # Album digests (one grouped post) and YouTube posts (previewed as a native
+    # video) are not edited in place — the per-part edit flow can't edit a media
+    # group / video message's text — so admins approve or reject them as a whole.
+    if str(submission.get("message_type") or "") == "album" or str(submission.get("source_type") or "") == "youtube":
+        await _answer_callback(callback, t("admin.alert.media_post_edit_unsupported"), show_alert=True)
         return
 
     parts = submission.get("parts", [])
@@ -1003,7 +1010,7 @@ def _format_part_for_moderation(text: str, part: dict | None = None) -> str:
     return format_post_html(
         text,
         source_url=str(part.get("source_url") or ""),
-        allow_source_link=_is_official_source_part(part),
+        allow_source_link=submission_allows_source_link(part),
         include_community_footer=True,
     )
 
@@ -1041,10 +1048,6 @@ def _part_has_media(part: dict) -> bool:
 
 def _media_type_for(message_type: str) -> str:
     return message_type if message_type in {"photo", "video", "document"} else "none"
-
-
-def _is_official_source_part(part: dict) -> bool:
-    return str(part.get("source_type") or "") == "official_marvel_rivals"
 
 
 async def _update_admin_preview(

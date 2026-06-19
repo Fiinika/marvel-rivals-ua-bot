@@ -5,6 +5,7 @@
       "unknown_action": "Невідома дія.",
       "submission_not_found": "Заявку не знайдено.",
       "submission_already_processed": "Цю заявку вже оброблено.",
+      "media_post_edit_unsupported": "Цей пост (відео/альбом) не редагується — підтвердьте або відхиліть його повністю.",
       "publish_failed": "Не вдалося опублікувати.",
       "published": "Опубліковано.",
       "rejected": "Відхилено.",
@@ -69,6 +70,9 @@
     "add_part": "➕ Нова частина",
     "save": "💾 Зберегти",
     "collector_official_marvel_rivals": "Офіційний сайт",
+    "collector_bluesky": "Bluesky",
+    "collector_youtube": "YouTube",
+    "collector_reddit": "Reddit (витоки)",
     "modlog_delete": "🗑 Видалити",
     "modlog_mute": "🔇 Мут 1 год",
     "modlog_ban": "⛔ Бан"
@@ -126,10 +130,10 @@
     "fallback_body": "Текст статті відсутній або не вдалося надійно витягти.",
     "date_marker": "Дата публікації:",
     "source_marker": "Джерело",
-    "source_line": "Повні деталі — на офіційному сайті.",
-    "hashtags": "#MarvelRivalsUA #Офіційно",
+    "source_line": "Джерело: {source_name}",
+    "hashtags": "#MarvelRivalsUA",
     "part_title": "Частина {number}",
-    "fallback_tag": "офіційно"
+    "fallback_tag": "marvelrivalsua"
   },
   "collectors": {
     "common": {
@@ -151,6 +155,41 @@
       "errors": {
         "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор офіційних новин пропускає AI-генерацію чернеток."
       }
+    },
+    "bluesky": {
+      "title": "Bluesky (офіційний акаунт)",
+      "source_name": "Bluesky Marvel Rivals",
+      "username": "bluesky_news_collector",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор Bluesky пропускає AI-генерацію чернеток."
+      }
+    },
+    "youtube": {
+      "title": "YouTube (офіційний канал)",
+      "source_name": "YouTube Marvel Rivals",
+      "username": "youtube_news_collector",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор YouTube пропускає AI-генерацію чернеток."
+      }
+    },
+    "reddit": {
+      "title": "Reddit (витоки Marvel Rivals)",
+      "source_name": "Reddit (витоки Marvel Rivals)",
+      "username": "reddit_leaks_collector",
+      "errors": {
+        "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Колектор Reddit пропускає AI-генерацію чернеток."
+      }
+    }
+  },
+  "digests": {
+    "fanart": {
+      "title": "🎨 Фан-арт тижня — Marvel Rivals",
+      "intro": "Найкращі роботи спільноти за минулий тиждень:",
+      "engagement": "А який арт сподобався вам найбільше? 🤔 Діліться в коментарях своїми улюбленими роботами цього тижня!",
+      "hashtags": "#MarvelRivalsUA #ФанАрт",
+      "username": "fanart_digest",
+      "tag": "фанарт",
+      "unknown_author": "автор невідомий"
     }
   },
   "post_footer": {
@@ -294,6 +333,7 @@
     "thank_you": "Дякуємо! Твою новину відправлено на модерацію.",
     "unsupported": "Наразі я можу приймати текст, посилання, фото, відео або документи.",
     "submission_error": "Вибач, не вдалося відправити новину на модерацію. Спробуй пізніше.",
-    "cooldown": "Зачекай ще {seconds} секунд перед наступною відправкою."
+    "cooldown": "Зачекай ще {seconds} секунд перед наступною відправкою.",
+    "too_short": "Повідомлення надто коротке 🙏 Опиши новину хоча б кількома словами — або просто надішли посилання, фото чи відео."
   }
 }

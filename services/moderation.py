@@ -14,8 +14,17 @@ from database import Database
 from keyboards import moderation_keyboard
 from services.formatter import format_admin_preview
 from services.i18n import t
-from services.post_footer import format_post_html
-from services.publisher import DISABLED_LINK_PREVIEW, TELEGRAM_CAPTION_LIMIT
+from services.post_footer import format_post_html, submission_allows_source_link
+from services.publisher import (
+    DISABLED_LINK_PREVIEW,
+    PREVIEW_LINK_SOURCE_TYPES,
+    TELEGRAM_CAPTION_LIMIT,
+    album_caption_html,
+    album_image_urls,
+    link_preview_options_for,
+    send_album_message,
+    send_youtube_post,
+)
 from services.telegram_retry import delay_between_telegram_sends, send_with_retries
 
 
@@ -64,12 +73,16 @@ async def _send_submission_parts_to_moderation(
     db: Database,
     submission: dict,
 ) -> None:
+    if str(submission.get("message_type") or "") == "album":
+        await _send_album_to_moderation(bot, config, submission)
+        return
+
     parts = list(submission.get("parts", []))
     for position, part in enumerate(parts):
         part_index = int(part["part_index"])
         part_with_context = {**submission, **part, "id": submission["id"]}
         try:
-            sent_part = await _send_part_message(bot, config.admin_chat_id, part_with_context)
+            sent_part = await _send_part_message(bot, config, config.admin_chat_id, part_with_context)
         except (TelegramAPIError, TimeoutError, ClientOSError) as exc:
             raise ModerationSendError(
                 f"Failed to send submission {submission['id']} part {part_index} to moderation"
@@ -93,13 +106,47 @@ async def _send_submission_parts_to_moderation(
             await delay_between_telegram_sends()
 
 
-async def _send_part_message(bot: Bot, chat_id: int, part: dict) -> SentModerationPart:
+async def _send_album_to_moderation(bot: Bot, config: Config, submission: dict) -> None:
+    """Preview an album submission for the admins: the media group plus the same
+    caption (with footer/links) that will be published."""
+    images = album_image_urls(submission)
+    caption = album_caption_html(submission)
+    try:
+        await send_album_message(bot, config.admin_chat_id, images, caption)
+    except (TelegramAPIError, TimeoutError, ClientOSError) as exc:
+        raise ModerationSendError(
+            f"Failed to send album submission {submission.get('id')} to moderation"
+        ) from exc
+
+
+async def _send_part_message(bot: Bot, config: Config, chat_id: int, part: dict) -> SentModerationPart:
     message_type = str(part.get("message_type") or "text")
     text = _format_part_for_moderation(str(part.get("text") or ""), part)
     file_id = part.get("file_id")
     media_url = part.get("media_url")
     media_value = file_id or media_url
     uses_external_media = not file_id and bool(media_url)
+
+    # A YouTube post is text + a source link; preview it the SAME way it will be
+    # published — as a native inline video (downloaded), falling back to a playable
+    # link preview — so the admin approves exactly what goes out.
+    if (
+        message_type == "text"
+        and config.enable_youtube_video_download
+        and str(part.get("source_type") or "") in PREVIEW_LINK_SOURCE_TYPES
+        and str(part.get("source_url") or "").strip()
+    ):
+        sent = await send_youtube_post(
+            bot,
+            chat_id,
+            str(part.get("source_url")),
+            text,
+            parse_mode="HTML",
+            link_preview=link_preview_options_for(part),
+            max_bytes=max(1, config.youtube_video_max_mb) * 1024 * 1024,
+        )
+        if sent is not None:
+            return SentModerationPart(content_message_id=sent.message_id)
 
     if message_type == "photo" and media_value:
         return await _send_media_part(
@@ -141,7 +188,7 @@ async def _send_part_message(bot: Bot, chat_id: int, part: dict) -> SentModerati
         chat_id=chat_id,
         text=text or t("formatter.empty"),
         parse_mode="HTML",
-        link_preview_options=DISABLED_LINK_PREVIEW,
+        link_preview_options=link_preview_options_for(part),
     )
     return SentModerationPart(content_message_id=message.message_id)
 
@@ -223,7 +270,7 @@ def _format_part_for_moderation(text: str, part: dict) -> str:
     return format_post_html(
         text,
         source_url=str(part.get("source_url") or ""),
-        allow_source_link=_is_official_source_part(part),
+        allow_source_link=submission_allows_source_link(part),
         include_community_footer=True,
     )
 
@@ -245,7 +292,3 @@ def _short_media_caption(part: dict) -> str:
         return f"Медіа до заявки #{submission_id}"
 
     return "Медіа до заявки"
-
-
-def _is_official_source_part(part: dict) -> bool:
-    return str(part.get("source_type") or "") == "official_marvel_rivals"

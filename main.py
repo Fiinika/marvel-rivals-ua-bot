@@ -21,6 +21,7 @@ from discord_moderation import start_discord_moderation
 from handlers import admin, moderation, user
 from services.collectors.registry import run_all_collectors
 from services.db_backup import start_db_backup_scheduler
+from services.digests.fanart import start_fanart_digest_scheduler
 from services.i18n import t
 
 
@@ -58,6 +59,7 @@ async def run() -> None:
     # misconfigured; any Discord failure is contained and never stops Telegram.
     discord_task = start_discord_moderation(config)
     backup_task = start_db_backup_scheduler(config)
+    fanart_digest_task = start_fanart_digest_scheduler(bot, config, database)
     try:
         await dispatcher.start_polling(
             bot,
@@ -66,7 +68,7 @@ async def run() -> None:
             allowed_updates=["message", "edited_message", "channel_post", "callback_query"],
         )
     finally:
-        for background_task in (news_scheduler_task, discord_task, backup_task):
+        for background_task in (news_scheduler_task, discord_task, backup_task, fanart_digest_task):
             if background_task is not None:
                 background_task.cancel()
                 with suppress(asyncio.CancelledError):

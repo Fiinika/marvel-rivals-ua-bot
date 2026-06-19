@@ -322,6 +322,86 @@ class Database:
             await db.commit()
             return submission_id
 
+    async def create_album_submission(
+        self,
+        *,
+        username: str,
+        original_text: str,
+        caption: str,
+        image_urls: list[str],
+        source_type: str,
+        source_id: str,
+        source_url: str,
+        article_date: str | None = None,
+        article_date_display: str | None = None,
+        tags: list[str] | None = None,
+    ) -> int:
+        """Create one ``album`` submission: a media group of up to 10 images plus a
+        single caption (stored on the first part), published as one grouped post.
+
+        Unlike create_ai_news_submission this keeps EVERY image (one per part) — the
+        4-image / per-text-part cap there is wrong for a digest album.
+        """
+        now = utc_now()
+        images: list[str] = []
+        seen: set[str] = set()
+        for value in image_urls:
+            url = str(value or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            images.append(url)
+            if len(images) >= 10:
+                break
+        if not images:
+            raise ValueError("album submission requires at least one image URL")
+        caption = caption.strip()
+
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO submissions (
+                    user_id, username, message_type, original_text, draft_text,
+                    file_id, media_url, media_type, source_url, source_type, source_id,
+                    article_date, article_date_display, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    0,
+                    username,
+                    "album",
+                    original_text,
+                    caption,
+                    None,
+                    images[0],
+                    "photo",
+                    source_url,
+                    source_type,
+                    source_id,
+                    article_date,
+                    article_date_display,
+                    STATUS_PENDING,
+                    now,
+                    now,
+                ),
+            )
+            submission_id = int(cursor.lastrowid)
+            part_rows = [
+                {
+                    "message_type": "album",
+                    "text": caption if index == 1 else "",
+                    "file_id": None,
+                    "media_url": image_url,
+                    "media_type": "photo",
+                }
+                for index, image_url in enumerate(images, start=1)
+            ]
+            await self._replace_submission_parts(db, submission_id, part_rows, now)
+            await self._set_submission_tags(db, submission_id, tags or [], now)
+            await db.commit()
+            return submission_id
+
     async def set_admin_message_id(self, submission_id: int, admin_message_id: int) -> None:
         await self._execute(
             """
@@ -424,6 +504,44 @@ class Database:
             )
             row = await cursor.fetchone()
             return str(row["article_date"]) if row else None
+
+    async def get_recent_seen_titles(
+        self,
+        *,
+        limit: int,
+        exclude_source_type: str | None = None,
+    ) -> list[str]:
+        """Return distinct recently-seen titles, newest first, for cross-source dedup.
+
+        The returned titles are compared against a new candidate's title. Identical
+        titles are collapsed and ordered by their most recent sighting; ``limit``
+        caps the result so the comparison prompt stays bounded (``limit <= 0``
+        returns nothing). Pass ``exclude_source_type`` to omit a source's own
+        titles — so a candidate is only ever compared against OTHER sources, which
+        is a no-op (and thus harmless) while a single source is configured.
+        """
+        if limit <= 0:
+            return []
+        conditions = ["title IS NOT NULL", "title != ''"]
+        params: list[object] = []
+        if exclude_source_type is not None:
+            conditions.append("source_type != ?")
+            params.append(exclude_source_type)
+        params.append(limit)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                f"""
+                SELECT title, MAX(first_seen_at) AS last_seen
+                FROM seen_sources
+                WHERE {" AND ".join(conditions)}
+                GROUP BY title
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+            return [str(row["title"]) for row in rows]
 
     async def set_submission_tags(self, submission_id: int, tag_names: list[str]) -> None:
         async with self._connect() as db:
