@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from html import unescape
@@ -344,10 +345,31 @@ def _failing_media_index(error_text: str, count: int) -> int:
     return 0
 
 
+def _is_fetchable_media_url(url: str) -> bool:
+    """Guard the bot-side album download against SSRF. Require https, and reject an
+    IP-literal host in a non-public range (loopback / private / link-local /
+    reserved) — e.g. the cloud metadata endpoint 169.254.169.254 or 127.0.0.1.
+    Hostnames pass through: redirects are disabled on the download client and the
+    collectors already allowlist their image CDN host, so the only thing left to
+    block here is an explicit internal-IP target."""
+    parsed = urlsplit(url.strip())
+    if parsed.scheme != "https":
+        return False
+    host = parsed.hostname or ""
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return True  # a DNS hostname, not an IP literal
+
+
 async def _download_album_photos(images: list[str]) -> list[tuple[bytes, str]]:
     photos: list[tuple[bytes, str]] = []
+    # follow_redirects=False so an allowlisted-looking URL cannot 302 to an internal
+    # host — the redirect target would otherwise be an unchecked SSRF target.
     async with httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=httpx.Timeout(_ALBUM_IMAGE_TIMEOUT_SECONDS),
         headers={"User-Agent": _ALBUM_IMAGE_USER_AGENT},
     ) as client:
@@ -359,25 +381,43 @@ async def _download_album_photos(images: list[str]) -> list[tuple[bytes, str]]:
 
 
 async def _download_album_photo(client: httpx.AsyncClient, url: str, index: int) -> tuple[bytes, str] | None:
+    if not _is_fetchable_media_url(url):
+        logger.warning("Skipping album image with a disallowed URL: %s", url)
+        return None
+
     try:
-        response = await client.get(url)
-        response.raise_for_status()
+        # Stream so an oversized body is aborted mid-download instead of being fully
+        # buffered into memory first (a non-image internal/huge response otherwise
+        # costs up to its full size in RAM before the post-hoc length check).
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+
+            content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            if content_type not in _ALBUM_ALLOWED_CONTENT_TYPES:
+                logger.warning("Skipping album image with unsupported content-type %r: %s", content_type, url)
+                return None
+
+            declared = response.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > _ALBUM_MAX_IMAGE_BYTES:
+                logger.warning("Skipping album image (declared %s bytes) over the upload limit: %s", declared, url)
+                return None
+
+            buffer = bytearray()
+            async for chunk in response.aiter_bytes():
+                buffer.extend(chunk)
+                if len(buffer) > _ALBUM_MAX_IMAGE_BYTES:
+                    logger.warning("Skipping album image over the %s-byte upload limit: %s", _ALBUM_MAX_IMAGE_BYTES, url)
+                    return None
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning("Album image download failed for %s: %s", url, exc)
         return None
 
-    content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-    if content_type not in _ALBUM_ALLOWED_CONTENT_TYPES:
-        logger.warning("Skipping album image with unsupported content-type %r: %s", content_type, url)
-        return None
-
-    data = response.content
-    if not data or len(data) > _ALBUM_MAX_IMAGE_BYTES:
-        logger.warning("Skipping album image (%s bytes) over the upload limit: %s", len(data), url)
+    if not buffer:
+        logger.warning("Skipping empty album image: %s", url)
         return None
 
     extension = "png" if content_type == "image/png" else ("webp" if content_type == "image/webp" else "jpg")
-    return (data, f"art_{index + 1}.{extension}")
+    return (bytes(buffer), f"art_{index + 1}.{extension}")
 
 
 def _submission_parts(submission: dict[str, Any]) -> list[dict[str, Any]]:

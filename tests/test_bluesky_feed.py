@@ -71,6 +71,32 @@ def test_parse_author_feed_extracts_images_and_web_url() -> None:
     assert post.web_url == "https://bsky.app/profile/marvelrivalsglobal.bsky.social/post/aaa"
 
 
+def test_image_urls_outside_bluesky_cdn_are_dropped() -> None:
+    # A tampered fullsize value must never become a media URL: only Bluesky's own
+    # image CDN (https cdn.bsky.app) is trusted; anything else (an internal SSRF
+    # target, a non-CDN host, or http) is dropped so it is never fetched bot-side
+    # or handed to Telegram.
+    post = {
+        "post": {
+            "uri": "at://did:plc:abc/app.bsky.feed.post/evil",
+            "author": {"handle": "marvelrivalsglobal.bsky.social"},
+            "record": {"text": "Pic", "createdAt": "2026-06-12T16:00:00Z"},
+            "embed": {
+                "$type": "app.bsky.embed.images#view",
+                "images": [
+                    {"fullsize": "https://cdn.bsky.app/img/feed_fullsize/ok.jpg", "alt": ""},
+                    {"fullsize": "http://169.254.169.254/latest/meta-data/", "alt": ""},
+                    {"fullsize": "https://evil.example.com/x.jpg", "alt": ""},
+                    {"fullsize": "https://cdn.bsky.app.attacker.com/x.jpg", "alt": ""},
+                ],
+            },
+        }
+    }
+    posts = parse_author_feed({"feed": [post]}, actor="marvelrivalsglobal.bsky.social")
+
+    assert posts[0].image_urls == ("https://cdn.bsky.app/img/feed_fullsize/ok.jpg",)
+
+
 def test_parse_author_feed_skips_reposts() -> None:
     repost = _image_post("ccc", "Reposted")
     repost["reason"] = {"$type": "app.bsky.feed.defs#reasonRepost"}

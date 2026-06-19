@@ -4,6 +4,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -18,6 +19,16 @@ DEFAULT_LIMIT = 20
 _TIMESTAMP_RE = re.compile(
     r"^(?P<base>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?P<frac>\.\d+)?(?P<tz>Z|[+-]\d{2}:?\d{2})?"
 )
+
+# Bluesky's own image CDN. The fullsize URL of a `#view` embed is server-generated
+# from the author's uploaded blob, so it always lives here; anything else is a
+# tampered/hostile URL that must never be fetched bot-side or handed to Telegram.
+_BLUESKY_IMAGE_HOST = "cdn.bsky.app"
+
+
+def _is_bluesky_image_url(url: str) -> bool:
+    parsed = urlsplit(url.strip())
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == _BLUESKY_IMAGE_HOST
 
 
 @dataclass(frozen=True)
@@ -133,12 +144,16 @@ def _extract_media(embed: Any) -> tuple[list[str], bool]:
 
     embed_type = str(embed.get("$type") or "")
     if embed_type == "app.bsky.embed.images#view":
-        urls = [
-            str(image.get("fullsize")).strip()
-            for image in embed.get("images") or []
-            if isinstance(image, dict) and image.get("fullsize")
-        ]
-        return [url for url in urls if url], False
+        urls: list[str] = []
+        for image in embed.get("images") or []:
+            if not isinstance(image, dict):
+                continue
+            url = str(image.get("fullsize") or "").strip()
+            # Drop anything not on Bluesky's image CDN so a tampered fullsize value
+            # can never become an SSRF target or an arbitrary URL sent to Telegram.
+            if url and _is_bluesky_image_url(url):
+                urls.append(url)
+        return urls, False
 
     if embed_type == "app.bsky.embed.video#view":
         return [], True
