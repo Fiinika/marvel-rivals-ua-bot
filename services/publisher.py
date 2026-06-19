@@ -177,7 +177,9 @@ def needs_external_video_download(part: dict[str, Any]) -> bool:
         return False
     if str(part.get("file_id") or "").strip():
         return False
-    return _is_safe_http_url(str(part.get("media_url") or ""))
+    media_url = str(part.get("media_url") or "")
+    # https-only, matching what download_external_video can actually fetch.
+    return _is_safe_http_url(media_url) and urlsplit(media_url).scheme == "https"
 
 
 async def download_external_video(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:

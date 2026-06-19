@@ -28,6 +28,15 @@ _PDS_SERVICE_TYPE = "AtprotoPersonalDataServer"
 # not supported (the post then falls back to a text post).
 _DID_PLC_RE = re.compile(r"^did:plc:[a-z2-7]{20,}$")
 
+# The PDS host comes from the DID document, which is attacker-influenceable. It is
+# therefore constrained to Bluesky's own PDS domains (the followed actor is
+# bsky-hosted on *.host.bsky.network) so a tampered serviceEndpoint can never point
+# the downloader at an internal host — an SSRF guard the IP-literal block alone
+# can't provide (a hostname can resolve to an internal IP). An actor on a custom
+# PDS simply falls back to a text post.
+_ALLOWED_PDS_HOSTS = frozenset({"bsky.social"})
+_ALLOWED_PDS_HOST_SUFFIXES = (".bsky.network",)
+
 
 async def resolve_video_blob_url(did: str, cid: str) -> str | None:
     """The getBlob MP4 URL for ``(did, cid)``, or None when the DID is not a
@@ -72,14 +81,24 @@ def _pds_endpoint(document: dict[str, Any]) -> str | None:
             continue
         if service.get("type") != _PDS_SERVICE_TYPE:
             continue
-        endpoint = str(service.get("serviceEndpoint") or "").strip()
-        # Require a plain https host (no IP literal / non-https) before we hand the
-        # URL to the downloader, as defence in depth against a tampered DID document.
-        if _is_safe_https_host(endpoint):
-            return endpoint
+        base = _normalized_pds_base(str(service.get("serviceEndpoint") or "").strip())
+        if base:
+            return base
     return None
 
 
-def _is_safe_https_host(url: str) -> bool:
-    parsed = urlsplit(url.strip())
-    return parsed.scheme == "https" and bool(parsed.hostname)
+def _normalized_pds_base(endpoint: str) -> str | None:
+    """A safe ``https://host`` base for a Bluesky PDS endpoint, or None.
+
+    Accepts only https endpoints on an allowlisted Bluesky PDS host, and rebuilds
+    the base from the bare host alone — dropping any userinfo, port, path, query or
+    fragment so a crafted serviceEndpoint can neither retarget the getBlob request
+    (e.g. ``https://x.bsky.network@127.0.0.1/``) nor corrupt its path.
+    """
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    if host not in _ALLOWED_PDS_HOSTS and not any(host.endswith(s) for s in _ALLOWED_PDS_HOST_SUFFIXES):
+        return None
+    return f"https://{host}"

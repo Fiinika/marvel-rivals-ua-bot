@@ -23,13 +23,33 @@ def test_empty_cid_returns_none() -> None:
     assert asyncio.run(resolve_video_blob_url(DID, "")) is None
 
 
+def _pds_doc(endpoint: str) -> dict:
+    return {"service": [{"type": "AtprotoPersonalDataServer", "serviceEndpoint": endpoint}]}
+
+
 def test_pds_endpoint_extraction() -> None:
-    doc = {"service": [{"type": "AtprotoPersonalDataServer", "serviceEndpoint": "https://pds.host.bsky.network"}]}
-    assert _pds_endpoint(doc) == "https://pds.host.bsky.network"
+    assert _pds_endpoint(_pds_doc("https://pds.host.bsky.network")) == "https://pds.host.bsky.network"
     # Non-https endpoints and wrong service types are rejected; empty docs yield None.
-    assert _pds_endpoint({"service": [{"type": "AtprotoPersonalDataServer", "serviceEndpoint": "http://pds"}]}) is None
-    assert _pds_endpoint({"service": [{"type": "Other", "serviceEndpoint": "https://x"}]}) is None
+    assert _pds_endpoint(_pds_doc("http://pds.host.bsky.network")) is None
+    assert _pds_endpoint({"service": [{"type": "Other", "serviceEndpoint": "https://x.bsky.network"}]}) is None
     assert _pds_endpoint({}) is None
+
+
+def test_pds_endpoint_rejects_non_bsky_hosts() -> None:
+    # SSRF guard: the PDS host comes from the (attacker-influenceable) DID document,
+    # so only Bluesky's own PDS domains are accepted — a hostname that could resolve
+    # to an internal IP is refused outright.
+    assert _pds_endpoint(_pds_doc("https://attacker.example")) is None
+    assert _pds_endpoint(_pds_doc("https://internal.host")) is None
+    # A look-alike suffix must not slip through.
+    assert _pds_endpoint(_pds_doc("https://evil-bsky.network.attacker.com")) is None
+
+
+def test_pds_endpoint_strips_path_userinfo_and_port() -> None:
+    # A path/query must not corrupt the getBlob request target...
+    assert _pds_endpoint(_pds_doc("https://x.bsky.network/foo?a=b")) == "https://x.bsky.network"
+    # ...and userinfo smuggling (real host after @) is rejected, not honoured.
+    assert _pds_endpoint(_pds_doc("https://x.bsky.network@127.0.0.1/")) is None
 
 
 def test_resolve_builds_getblob_url(monkeypatch) -> None:

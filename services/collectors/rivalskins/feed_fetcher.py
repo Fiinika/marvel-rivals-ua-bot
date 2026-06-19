@@ -14,10 +14,12 @@ from dataclasses import dataclass
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
-from xml.etree import ElementTree
+from xml.etree.ElementTree import Element, ParseError
 
 import httpx
 from bs4 import BeautifulSoup
+from defusedxml.ElementTree import fromstring as parse_xml
+from defusedxml.common import DefusedXmlException
 
 
 logger = logging.getLogger(__name__)
@@ -80,8 +82,10 @@ class RivalSkinsFeedFetcher:
 
 def parse_feed(xml_text: str) -> list[RivalSkinsPost]:
     try:
-        root = ElementTree.fromstring(xml_text)
-    except ElementTree.ParseError as exc:
+        # defusedxml: the feed is untrusted, so forbid DTDs/entity expansion
+        # (billion-laughs) and external entities.
+        root = parse_xml(xml_text)
+    except (ParseError, DefusedXmlException) as exc:
         logger.warning("Failed to parse rivalskins feed XML: %s", exc)
         return []
 
@@ -101,7 +105,7 @@ def parse_feed(xml_text: str) -> list[RivalSkinsPost]:
     return posts
 
 
-def _parse_item(item: ElementTree.Element) -> RivalSkinsPost | None:
+def _parse_item(item: Element) -> RivalSkinsPost | None:
     link = (item.findtext("link") or "").strip()
     guid = (item.findtext("guid") or "").strip()
     post_id = guid or link

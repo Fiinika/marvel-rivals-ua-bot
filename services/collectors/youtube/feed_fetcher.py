@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from xml.etree import ElementTree
+from xml.etree.ElementTree import Element, ParseError
 
 import httpx
+from defusedxml.ElementTree import fromstring as parse_xml
+from defusedxml.common import DefusedXmlException
 
 
 logger = logging.getLogger(__name__)
@@ -64,11 +66,10 @@ async def _fetch_feed(channel_id: str) -> str | None:
 
 
 def parse_feed(xml_text: str) -> list[YouTubeVideo]:
-    # The feed comes from YouTube over HTTPS, so ElementTree (which expands internal
-    # entities) is an acceptable parser here; the source is trusted, not user input.
     try:
-        root = ElementTree.fromstring(xml_text)
-    except ElementTree.ParseError as exc:
+        # defusedxml: forbid DTDs/entity expansion on the fetched feed.
+        root = parse_xml(xml_text)
+    except (ParseError, DefusedXmlException) as exc:
         logger.warning("Failed to parse YouTube feed XML: %s", exc)
         return []
 
@@ -88,7 +89,7 @@ def parse_feed(xml_text: str) -> list[YouTubeVideo]:
     return videos
 
 
-def _parse_entry(entry: ElementTree.Element, channel_name: str) -> YouTubeVideo | None:
+def _parse_entry(entry: Element, channel_name: str) -> YouTubeVideo | None:
     video_id = (entry.findtext(f"{_YT}videoId") or "").strip()
     if not video_id:
         return None
@@ -121,7 +122,7 @@ def _parse_entry(entry: ElementTree.Element, channel_name: str) -> YouTubeVideo 
     )
 
 
-def _extract_link(entry: ElementTree.Element) -> str | None:
+def _extract_link(entry: Element) -> str | None:
     alternate = entry.find(f"{_ATOM}link[@rel='alternate']")
     if alternate is not None:
         href = (alternate.get("href") or "").strip()

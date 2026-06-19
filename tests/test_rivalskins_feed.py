@@ -91,6 +91,19 @@ def test_parse_feed_invalid_xml_returns_empty() -> None:
     assert parse_feed("") == []
 
 
+def test_parse_feed_rejects_entity_expansion_bomb() -> None:
+    # The feed is untrusted: a DTD with nested entities (billion-laughs) must be
+    # refused by the defused parser, not expanded — parse_feed returns [].
+    bomb = (
+        '<?xml version="1.0"?>'
+        "<!DOCTYPE rss [<!ENTITY a \"aaaaaaaaaa\">"
+        '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">'
+        '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>'
+        '<rss version="2.0"><channel><item><title>&c;</title></item></channel></rss>'
+    )
+    assert parse_feed(bomb) == []
+
+
 def test_normalize_pubdate_rfc822_to_utc_iso() -> None:
     assert _normalize_pubdate("Tue, 09 Jun 2026 20:07:38 +0000") == "2026-06-09T20:07:38+00:00"
     # A non-UTC offset is converted to UTC.

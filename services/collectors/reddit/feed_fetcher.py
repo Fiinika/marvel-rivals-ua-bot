@@ -5,10 +5,12 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
-from xml.etree import ElementTree
+from xml.etree.ElementTree import Element, ParseError
 
 import httpx
 from bs4 import BeautifulSoup
+from defusedxml.ElementTree import fromstring as parse_xml
+from defusedxml.common import DefusedXmlException
 
 
 logger = logging.getLogger(__name__)
@@ -113,8 +115,9 @@ def _build_flair_query(flairs: Sequence[str]) -> str:
 
 def parse_feed(xml_text: str) -> list[RedditPost]:
     try:
-        root = ElementTree.fromstring(xml_text)
-    except ElementTree.ParseError as exc:
+        # defusedxml: the feed is untrusted, so forbid DTDs/entity expansion.
+        root = parse_xml(xml_text)
+    except (ParseError, DefusedXmlException) as exc:
         logger.warning("Failed to parse Reddit feed XML: %s", exc)
         return []
 
@@ -130,7 +133,7 @@ def parse_feed(xml_text: str) -> list[RedditPost]:
     return posts
 
 
-def _parse_entry(entry: ElementTree.Element) -> RedditPost | None:
+def _parse_entry(entry: Element) -> RedditPost | None:
     post_id = (entry.findtext(f"{_ATOM}id") or "").strip()
     if not post_id:
         return None

@@ -172,6 +172,10 @@ def test_needs_external_video_download_only_for_external_source_videos() -> None
     assert needs_external_video_download(
         {"message_type": "video", "source_type": "bluesky", "media_url": "ftp://x"}
     ) is False
+    # http is rejected too — only https is fetchable, so routing must match.
+    assert needs_external_video_download(
+        {"message_type": "video", "source_type": "bluesky", "media_url": "http://pds.host.bsky.network/x"}
+    ) is False
 
 
 def _patch_async_client(monkeypatch, handler) -> None:
