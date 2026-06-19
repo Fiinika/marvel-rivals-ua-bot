@@ -199,6 +199,55 @@ def test_fetch_listing_filters_excluded_and_collapses_reuploads() -> None:
     assert len(entries) == 2
 
 
+def test_fetch_listing_prefers_described_full_upload_over_short() -> None:
+    # The channel ships the same trailer as a description-less Short (listed first
+    # in the feed) AND a full /watch upload that carries the real description. The
+    # collapsed entry must keep the described upload so the AI draft has text.
+    videos = [
+        YouTubeVideo(
+            "SHORT", "https://www.youtube.com/shorts/SHORT",
+            "18 vs. 18 Bounty Annihilation | #MarvelRivals", "",
+            "2026-06-09T12:00:00+00:00", None, "MR",
+        ),
+        YouTubeVideo(
+            "FULL", "https://www.youtube.com/watch?v=FULL",
+            "18 vs. 18 Bounty Annihilation | MarvelRivals", "Thirty-six heroes, one arena...",
+            "2026-06-09T11:59:00+00:00", None, "MR",
+        ),
+    ]
+    collector = _collector(videos)
+
+    entries = asyncio.run(collector.fetch_listing())
+
+    assert len(entries) == 1  # the Short and the full upload collapse to one trailer
+    kept = entries[0].payload
+    assert kept.video_id == "FULL"  # the described variant wins regardless of order
+    assert kept.description.startswith("Thirty-six heroes")
+
+
+def test_fetch_listing_keeps_described_upload_when_short_comes_later() -> None:
+    # Symmetric case: the described upload is seen first, a description-less Short
+    # of the same trailer comes later — the Short must not overwrite it.
+    videos = [
+        YouTubeVideo(
+            "FULL", "https://www.youtube.com/watch?v=FULL",
+            "K'un-Lun: Shenloong Arena | MarvelRivals", "The legendary tournament...",
+            "2026-06-09T12:00:00+00:00", None, "MR",
+        ),
+        YouTubeVideo(
+            "SHORT", "https://www.youtube.com/shorts/SHORT",
+            "K'un-Lun: Shenloong Arena | #MarvelRivals", "",
+            "2026-06-09T11:00:00+00:00", None, "MR",
+        ),
+    ]
+    collector = _collector(videos)
+
+    entries = asyncio.run(collector.fetch_listing())
+
+    assert len(entries) == 1
+    assert entries[0].payload.video_id == "FULL"
+
+
 def test_parse_entry_maps_video_to_draft_candidate() -> None:
     video = YouTubeVideo(
         video_id="VID9",

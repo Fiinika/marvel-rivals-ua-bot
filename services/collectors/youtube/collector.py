@@ -43,8 +43,8 @@ class YouTubeCollector(BaseNewsCollector):
 
     async def fetch_listing(self) -> list[ListingEntry]:
         videos = await self.fetcher.fetch_recent_videos()
-        entries: list[ListingEntry] = []
-        seen_keys: set[str] = set()
+        best_by_key: dict[str, YouTubeVideo] = {}
+        order: list[str] = []
         for video in videos:
             if not video.title and not video.description:
                 continue
@@ -53,15 +53,21 @@ class YouTubeCollector(BaseNewsCollector):
                 continue
 
             # Collapse the channel's re-uploads of the same trailer (different video
-            # IDs, identical title) to a single entry, keeping the newest (videos are
-            # already sorted newest-first).
+            # IDs, identical normalised title) to a single entry. Among the collapsed
+            # variants prefer the one that carries a description: the channel ships
+            # the same trailer both as a Short (no description) and as a full /watch
+            # upload (full description), and the AI draft needs that text — so a
+            # description-less Short must never hide the richer upload, regardless of
+            # feed order. Otherwise keep the newest (videos are sorted newest-first).
             dedup_key = _dedup_key(video)
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
-            entries.append(ListingEntry(dedup_key=dedup_key, payload=video))
+            existing = best_by_key.get(dedup_key)
+            if existing is None:
+                best_by_key[dedup_key] = video
+                order.append(dedup_key)
+            elif _is_richer_variant(video, existing):
+                best_by_key[dedup_key] = video
 
-        return entries
+        return [ListingEntry(dedup_key=key, payload=best_by_key[key]) for key in order]
 
     async def parse_entry(self, entry: ListingEntry) -> DraftCandidate:
         video: YouTubeVideo = entry.payload  # type: ignore[assignment]
@@ -104,6 +110,14 @@ def _dedup_key(video: YouTubeVideo) -> str:
         day = video.published[:10] if video.published else ""
         return f"yt-title:{day}:{normalized}"
     return f"yt-video:{video.video_id}"
+
+
+def _is_richer_variant(candidate: YouTubeVideo, current: YouTubeVideo) -> bool:
+    """Whether ``candidate`` should replace an already-collapsed ``current`` of the
+    same trailer. Prefer a variant that actually carries a description (the full
+    /watch upload) over a description-less one (a Short). Equal cases keep the
+    first-seen (newest) variant."""
+    return bool(candidate.description.strip()) and not current.description.strip()
 
 
 def _is_excluded(title: str, exclude_keywords: Iterable[str]) -> bool:
