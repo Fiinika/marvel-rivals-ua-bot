@@ -101,8 +101,10 @@ async def run_fanart_digest_once(
     )
     posts = await fetcher.fetch_recent_posts()
     # A media group is atomic — ONE URL Telegram can't fetch fails the whole album.
-    # So include only direct i.redd.it images, which Telegram reliably fetches;
-    # gallery/video/external posts (signed preview thumbnails) are skipped.
+    # So include only direct i.redd.it images, which Telegram reliably fetches.
+    # The fetcher already upgrades preview.redd.it thumbnails to their full-res
+    # i.redd.it original, so only posts with no Reddit-hosted image at all
+    # (gallery/video/external-link previews) are skipped here.
     arts = [post for post in posts if _is_direct_image(post.image_url)][: config.fanart_digest_count]
     if not arts:
         logger.warning("Fan-art digest for %s found no direct-image posts; not marking the week done.", week_key)

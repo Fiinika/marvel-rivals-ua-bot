@@ -13,11 +13,13 @@ from services.collectors.reddit.collector import (
     RedditLeaksCollector,
     _is_excluded,
 )
+from services.collectors.reddit import feed_fetcher
 from services.collectors.reddit.feed_fetcher import (
     RedditPost,
     _build_flair_query,
     _normalize_timestamp,
     parse_feed,
+    upgrade_preview_images,
 )
 
 
@@ -178,6 +180,152 @@ def test_is_excluded_matches_megathread() -> None:
     keywords = frozenset({"megathread"})
     assert _is_excluded("Marvel Rivals Season 8.5 Megathread", keywords) is True
     assert _is_excluded("Doctor Doom set for season 11!", keywords) is False
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, content_type: str) -> None:
+        self.status_code = status_code
+        self.headers = {"content-type": content_type}
+
+
+class _FakeClient:
+    """Stands in for httpx.AsyncClient during the preview-upgrade HEAD probe."""
+
+    def __init__(self, responses: dict[str, object], calls: list[str]) -> None:
+        self._responses = responses
+        self._calls = calls
+
+    async def __aenter__(self) -> "_FakeClient":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    async def head(self, url: str):
+        self._calls.append(url)
+        result = self._responses.get(url, _FakeResponse(403, "text/html"))
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _run_upgrade(monkeypatch, posts: list[RedditPost], responses: dict[str, object]) -> tuple[list[RedditPost], list[str]]:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        feed_fetcher.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _FakeClient(responses, calls),
+    )
+    return asyncio.run(upgrade_preview_images(posts)), calls
+
+
+def _post(image_url: str | None, post_id: str = "t3_a") -> RedditPost:
+    return RedditPost(
+        post_id=post_id,
+        web_url=f"https://www.reddit.com/r/MarvelRivalsLeaks/comments/{post_id[3:]}/x/",
+        title="Leak",
+        body_text="body",
+        created_at="2026-07-25T20:00:00+00:00",
+        image_url=image_url,
+        author="/u/tester",
+    )
+
+
+def test_upgrade_preview_swaps_tiny_thumbnail_to_full_res(monkeypatch) -> None:
+    posts = [_post("https://preview.redd.it/abc123.png?width=140&height=125&s=sig")]
+    upgraded, calls = _run_upgrade(
+        monkeypatch,
+        posts,
+        {"https://i.redd.it/abc123.png": _FakeResponse(200, "image/png")},
+    )
+
+    assert calls == ["https://i.redd.it/abc123.png"]
+    # The signed 140px thumbnail is replaced by the full-resolution original.
+    assert upgraded[0].image_url == "https://i.redd.it/abc123.png"
+    # Every other field is carried over untouched.
+    assert upgraded[0].post_id == posts[0].post_id
+    assert upgraded[0].title == posts[0].title
+
+
+def test_upgrade_preview_leaves_external_preview_alone(monkeypatch) -> None:
+    # external-preview mirrors an image hosted ELSEWHERE: it has no i.redd.it twin,
+    # so it must not even be probed.
+    url = "https://external-preview.redd.it/Nx-9Zq.jpeg?width=640&s=sig"
+    upgraded, calls = _run_upgrade(monkeypatch, [_post(url)], {})
+
+    assert calls == []
+    assert upgraded[0].image_url == url
+
+
+def test_upgrade_preview_leaves_direct_and_missing_images_alone(monkeypatch) -> None:
+    posts = [_post("https://i.redd.it/already.jpeg", "t3_a"), _post(None, "t3_b")]
+    upgraded, calls = _run_upgrade(monkeypatch, posts, {})
+
+    assert calls == []
+    assert [p.image_url for p in upgraded] == ["https://i.redd.it/already.jpeg", None]
+
+
+def test_upgrade_preview_keeps_thumbnail_when_twin_is_missing(monkeypatch) -> None:
+    # Video/gallery previews have no i.redd.it original — Reddit answers 403/404.
+    url = "https://preview.redd.it/novideo.jpg?width=140&s=sig"
+    upgraded, calls = _run_upgrade(monkeypatch, [_post(url)], {})
+
+    assert calls == ["https://i.redd.it/novideo.jpg"]
+    assert upgraded[0].image_url == url
+
+
+def test_upgrade_preview_rejects_non_image_response(monkeypatch) -> None:
+    url = "https://preview.redd.it/page.jpg?s=sig"
+    upgraded, _calls = _run_upgrade(
+        monkeypatch,
+        [_post(url)],
+        {"https://i.redd.it/page.jpg": _FakeResponse(200, "text/html; charset=utf-8")},
+    )
+
+    assert upgraded[0].image_url == url
+
+
+def test_upgrade_preview_survives_network_error(monkeypatch) -> None:
+    url = "https://preview.redd.it/flaky.jpg?s=sig"
+    upgraded, _calls = _run_upgrade(
+        monkeypatch,
+        [_post(url)],
+        {"https://i.redd.it/flaky.jpg": feed_fetcher.httpx.ConnectError("boom")},
+    )
+
+    assert upgraded[0].image_url == url
+
+
+def test_upgrade_preview_skips_paths_that_are_not_plain_filenames(monkeypatch) -> None:
+    # Anything but a single-segment image file name is left as-is rather than
+    # guessed at, so a crafted path can never be turned into a fetched URL.
+    for path in ("/../../evil.jpg", "/nested/dir/img.jpg", "/noextension", "/img.svg"):
+        url = f"https://preview.redd.it{path}?s=sig"
+        upgraded, calls = _run_upgrade(monkeypatch, [_post(url)], {})
+        assert calls == [], path
+        assert upgraded[0].image_url == url, path
+
+
+def test_upgrade_preview_handles_a_mixed_batch(monkeypatch) -> None:
+    posts = [
+        _post("https://preview.redd.it/one.png?width=140&s=sig", "t3_a"),
+        _post("https://external-preview.redd.it/two.jpg?width=640&s=sig", "t3_b"),
+        _post("https://i.redd.it/three.jpeg", "t3_c"),
+        _post("https://preview.redd.it/four.jpg?width=140&s=sig", "t3_d"),
+    ]
+    upgraded, calls = _run_upgrade(
+        monkeypatch,
+        posts,
+        {"https://i.redd.it/one.png": _FakeResponse(200, "image/png")},
+    )
+
+    assert sorted(calls) == ["https://i.redd.it/four.jpg", "https://i.redd.it/one.png"]
+    assert [p.image_url for p in upgraded] == [
+        "https://i.redd.it/one.png",  # upgraded
+        "https://external-preview.redd.it/two.jpg?width=640&s=sig",  # untouched
+        "https://i.redd.it/three.jpeg",  # already full-res
+        "https://preview.redd.it/four.jpg?width=140&s=sig",  # twin missing, kept
+    ]
 
 
 class _StubFetcher:

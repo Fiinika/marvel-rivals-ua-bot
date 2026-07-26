@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import quote, urlsplit
 from xml.etree.ElementTree import Element, ParseError
 
@@ -32,6 +33,17 @@ _IMAGE_EXT_RE = re.compile(r"\.(?:jpe?g|png|gif|webp)(?:\?|$)", re.IGNORECASE)
 # https://evil.com/i.redd.it/x.jpg can never be served as the post's photo.
 _REDDIT_DIRECT_IMAGE_HOST = "i.redd.it"
 _REDDIT_THUMBNAIL_HOSTS = frozenset({"preview.redd.it", "external-preview.redd.it", "i.redd.it"})
+
+# A preview.redd.it thumbnail mirrors a Reddit-hosted image under the SAME file
+# name on i.redd.it, so the tiny (often 140px) preview can be upgraded to the
+# full-resolution original by swapping the host. external-preview.redd.it mirrors
+# images hosted ELSEWHERE and has no i.redd.it twin, so it is never upgraded.
+_REDDIT_PREVIEW_HOST = "preview.redd.it"
+# Single-segment image file name only — anything else is left as-is rather than
+# guessed at. The host is hardcoded, so a crafted path can never retarget the URL.
+_PREVIEW_FILENAME_RE = re.compile(r"^/[A-Za-z0-9_-]+\.(?:jpe?g|png|gif|webp)$", re.IGNORECASE)
+_UPGRADE_TIMEOUT_SECONDS = 10.0
+_MAX_CONCURRENT_UPGRADES = 5
 
 
 def _is_reddit_image_url(url: str, allowed_hosts: frozenset[str]) -> bool:
@@ -77,9 +89,10 @@ class RedditSearchFetcher:
         posts = parse_feed(xml_text)
         if not posts:
             logger.warning("Reddit feed for r/%s returned no usable posts", self.subreddit)
-        else:
-            logger.info("Fetched %s Reddit posts for r/%s", len(posts), self.subreddit)
-        return posts
+            return posts
+
+        logger.info("Fetched %s Reddit posts for r/%s", len(posts), self.subreddit)
+        return await upgrade_preview_images(posts)
 
     async def _fetch_feed(self) -> str | None:
         if not self.flairs:
@@ -111,6 +124,71 @@ class RedditSearchFetcher:
 
 def _build_flair_query(flairs: Sequence[str]) -> str:
     return " OR ".join(f'flair:"{flair}"' for flair in flairs)
+
+
+async def upgrade_preview_images(posts: list[RedditPost]) -> list[RedditPost]:
+    """Replace signed preview.redd.it thumbnails with their full-resolution
+    i.redd.it original, where one exists.
+
+    Reddit serves such thumbnails as small as 140px, which looks broken as a post
+    photo and makes the fan-art digest skip the art entirely (it accepts direct
+    i.redd.it images only). The upgrade is verified with a HEAD request per post —
+    posts whose twin is missing (video/gallery previews) keep the signed thumbnail.
+    """
+    candidates = [index for index, post in enumerate(posts) if _upgradable_preview_url(post.image_url)]
+    if not candidates:
+        return posts
+
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_UPGRADES)
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        timeout=httpx.Timeout(_UPGRADE_TIMEOUT_SECONDS),
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
+
+        async def resolve(index: int) -> tuple[int, str | None]:
+            async with semaphore:
+                return index, await _resolve_full_res(client, str(posts[index].image_url))
+
+        results = await asyncio.gather(*(resolve(index) for index in candidates))
+
+    upgraded = list(posts)
+    changed = 0
+    for index, full_res in results:
+        if full_res:
+            upgraded[index] = replace(upgraded[index], image_url=full_res)
+            changed += 1
+    if changed:
+        logger.info("Upgraded %s/%s Reddit preview thumbnails to full resolution", changed, len(candidates))
+    return upgraded
+
+
+def _upgradable_preview_url(url: str | None) -> bool:
+    if not url:
+        return False
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc.lower() == _REDDIT_PREVIEW_HOST
+        and bool(_PREVIEW_FILENAME_RE.match(parsed.path))
+    )
+
+
+async def _resolve_full_res(client: httpx.AsyncClient, preview_url: str) -> str | None:
+    """The i.redd.it twin of ``preview_url`` when it really exists, else None."""
+    # The host is hardcoded and only the validated file name is reused, so this URL
+    # can never be pointed anywhere but Reddit's own image CDN.
+    candidate = f"https://{_REDDIT_DIRECT_IMAGE_HOST}{urlsplit(preview_url).path}"
+    try:
+        response = await client.head(candidate)
+    except httpx.HTTPError as exc:
+        logger.info("Could not verify full-res Reddit image %s: %s", candidate, exc)
+        return None
+
+    content_type = response.headers.get("content-type", "")
+    if response.status_code == 200 and content_type.lower().startswith("image/"):
+        return candidate
+    return None
 
 
 def parse_feed(xml_text: str) -> list[RedditPost]:
