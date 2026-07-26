@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from aiogram import Bot
 
@@ -32,6 +33,10 @@ from services.collectors.rivalskins.collector import (
     RivalSkinsCollector,
 )
 from services.collectors.throttle import SubmissionThrottle
+from services.collectors.wiki_facts.collector import (
+    DEFINITION as WIKI_FACTS_DEFINITION,
+    WikiFactsCollector,
+)
 from services.collectors.youtube.collector import (
     DEFINITION as YOUTUBE_DEFINITION,
     YouTubeCollector,
@@ -49,46 +54,63 @@ def _always_enabled(_config: Config) -> bool:
     return True
 
 
-_COLLECTORS: dict[str, tuple[CollectorDefinition, CollectorFactory, CollectorEnabledCheck]] = {
-    OFFICIAL_MARVEL_RIVALS_DEFINITION.collector_id: (
+@dataclass(frozen=True)
+class _CollectorEntry:
+    definition: CollectorDefinition
+    factory: CollectorFactory
+    is_enabled: CollectorEnabledCheck
+    # False for a source that runs on its OWN schedule: it stays selectable as a
+    # manual /fetch_news button but must never join the shared news tick, which
+    # would post from it every NEWS_CHECK_INTERVAL_MINUTES instead of weekly.
+    scheduled: bool = True
+
+
+_COLLECTORS: dict[str, _CollectorEntry] = {
+    OFFICIAL_MARVEL_RIVALS_DEFINITION.collector_id: _CollectorEntry(
         OFFICIAL_MARVEL_RIVALS_DEFINITION,
         OfficialMarvelRivalsCollector,
         _always_enabled,
     ),
-    BLUESKY_DEFINITION.collector_id: (
+    BLUESKY_DEFINITION.collector_id: _CollectorEntry(
         BLUESKY_DEFINITION,
         BlueskyCollector,
         lambda config: config.enable_bluesky_source,
     ),
-    YOUTUBE_DEFINITION.collector_id: (
+    YOUTUBE_DEFINITION.collector_id: _CollectorEntry(
         YOUTUBE_DEFINITION,
         YouTubeCollector,
         lambda config: config.enable_youtube_source,
     ),
-    REDDIT_DEFINITION.collector_id: (
+    REDDIT_DEFINITION.collector_id: _CollectorEntry(
         REDDIT_DEFINITION,
         RedditLeaksCollector,
         lambda config: config.enable_reddit_source,
     ),
-    RIVALSKINS_DEFINITION.collector_id: (
+    RIVALSKINS_DEFINITION.collector_id: _CollectorEntry(
         RIVALSKINS_DEFINITION,
         RivalSkinsCollector,
         lambda config: config.enable_rivalskins_source,
+    ),
+    WIKI_FACTS_DEFINITION.collector_id: _CollectorEntry(
+        WIKI_FACTS_DEFINITION,
+        WikiFactsCollector,
+        lambda config: config.enable_wiki_facts,
+        scheduled=False,  # weekly rubric: manual button only, never on the tick
     ),
 }
 
 
 def list_collector_definitions(config: Config | None = None) -> list[CollectorDefinition]:
     return [
-        definition
-        for definition, _factory, is_enabled in _COLLECTORS.values()
-        if config is None or is_enabled(config)
+        entry.definition
+        for entry in _COLLECTORS.values()
+        if config is None or entry.is_enabled(config)
     ]
 
 
 def get_collector_definition(collector_id: str) -> CollectorDefinition | None:
     entry = _COLLECTORS.get(collector_id)
-    return entry[0] if entry is not None else None
+    return entry.definition if entry is not None else None
 
 
 def create_collector(
@@ -99,21 +121,19 @@ def create_collector(
     bot: Bot,
 ):
     entry = _COLLECTORS.get(collector_id)
-    if entry is None:
+    if entry is None or not entry.is_enabled(config):
         return None
 
-    _definition, factory, is_enabled = entry
-    if not is_enabled(config):
-        return None
-
-    return factory(config=config, db=db, bot=bot)
+    return entry.factory(config=config, db=db, bot=bot)
 
 
 def create_all_collectors(*, config: Config, db: Database, bot: Bot) -> list[object]:
+    """The collectors that belong to the periodic news tick — self-scheduled
+    sources are deliberately excluded."""
     return [
-        factory(config=config, db=db, bot=bot)
-        for _definition, factory, is_enabled in _COLLECTORS.values()
-        if is_enabled(config)
+        entry.factory(config=config, db=db, bot=bot)
+        for entry in _COLLECTORS.values()
+        if entry.scheduled and entry.is_enabled(config)
     ]
 
 

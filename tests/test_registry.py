@@ -16,7 +16,13 @@ from services.collectors.registry import (
 )
 
 
-def _config(bluesky: bool, youtube: bool = False, reddit: bool = False, rivalskins: bool = False) -> SimpleNamespace:
+def _config(
+    bluesky: bool,
+    youtube: bool = False,
+    reddit: bool = False,
+    rivalskins: bool = False,
+    wiki_facts: bool = False,
+) -> SimpleNamespace:
     return SimpleNamespace(
         enable_bluesky_source=bluesky,
         bluesky_actor="marvelrivalsglobal.bsky.social",
@@ -29,6 +35,8 @@ def _config(bluesky: bool, youtube: bool = False, reddit: bool = False, rivalski
         reddit_exclude_keywords=frozenset({"megathread"}),
         enable_rivalskins_source=rivalskins,
         rivalskins_feed_url="https://rivalskins.com/category/leaks/feed/",
+        enable_wiki_facts=wiki_facts,
+        wiki_facts_api_url="https://marvelrivals.fandom.com/api.php",
         official_news_url="https://www.marvelrivals.com/news/",
         article_timezone="Europe/Kyiv",
     )
@@ -81,9 +89,29 @@ def test_rivalskins_create_respects_gate() -> None:
     assert collector.definition.collector_id == "rivalskins"
 
 
+def test_wiki_facts_hidden_when_disabled_and_shown_when_enabled() -> None:
+    assert "wiki_facts" not in {d.collector_id for d in list_collector_definitions(_config(False, wiki_facts=False))}
+    assert "wiki_facts" in {d.collector_id for d in list_collector_definitions(_config(False, wiki_facts=True))}
+
+
+def test_wiki_facts_create_respects_gate() -> None:
+    assert create_collector("wiki_facts", config=_config(False, wiki_facts=False), db=None, bot=None) is None
+    collector = create_collector("wiki_facts", config=_config(False, wiki_facts=True), db=None, bot=None)
+    assert collector is not None
+    assert collector.definition.collector_id == "wiki_facts"
+
+
+def test_wiki_facts_never_joins_the_news_tick() -> None:
+    # The rubric is weekly and has its own scheduler. It is a manual /fetch_news
+    # button only — joining the tick would post a fact every interval instead.
+    ids = [c.definition.collector_id for c in create_all_collectors(config=_config(True, wiki_facts=True), db=None, bot=None)]
+    assert "wiki_facts" not in ids
+    assert "official_marvel_rivals" in ids  # ordinary sources still run on the tick
+
+
 def test_list_without_config_returns_all() -> None:
     ids = {d.collector_id for d in list_collector_definitions()}
-    assert {"official_marvel_rivals", "bluesky", "youtube", "reddit", "rivalskins"} <= ids
+    assert {"official_marvel_rivals", "bluesky", "youtube", "reddit", "rivalskins", "wiki_facts"} <= ids
 
 
 def test_create_collector_respects_gate() -> None:
