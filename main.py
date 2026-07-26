@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import logging
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
@@ -222,9 +223,18 @@ def _start_news_scheduler_if_enabled(bot: Bot, config: Config, db: Database) -> 
 
 
 async def _news_scheduler(bot: Bot, config: Config, db: Database) -> None:
+    """Poll every source on a fixed cadence.
+
+    The first run happens immediately rather than after one interval: a restart
+    would otherwise leave the bot blind for a full interval, and a deploy is
+    exactly when it is most likely to have missed something. The wait is measured
+    from the START of each run, so a slow tick cannot make the schedule drift —
+    sources publish on the hour, and a drifting poll turns a predictable lag into
+    a random one.
+    """
     interval_seconds = config.news_check_interval_minutes * 60
     while True:
-        await asyncio.sleep(interval_seconds)
+        started_at = time.monotonic()
         try:
             stats_list = await run_all_collectors(config=config, db=db, bot=bot)
             total_found = sum(stats.found for stats in stats_list)
@@ -243,6 +253,9 @@ async def _news_scheduler(bot: Bot, config: Config, db: Database) -> None:
             )
         except Exception:
             logger.exception("News scheduler failed")
+
+        elapsed = time.monotonic() - started_at
+        await asyncio.sleep(max(1.0, interval_seconds - elapsed))
 
 
 def main() -> None:

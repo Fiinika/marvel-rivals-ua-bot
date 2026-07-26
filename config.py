@@ -15,6 +15,11 @@ class ConfigError(ValueError):
 # game's name, rendering "Rivals" as "суперники"), fit noticeably more of a patch
 # note into the same character budget, and was the fastest of the three.
 DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+# How often every source is polled. A full tick over all sources costs about two
+# seconds when nothing is new, so the interval is set by how stale a post may be,
+# not by cost: at 30 minutes a big announcement reached the queue up to half an
+# hour late, which loses the race to other channels.
+DEFAULT_NEWS_CHECK_INTERVAL_MINUTES = 5
 DEFAULT_YOUTUBE_CHANNEL_ID = "UCWzmOSSiSPbVnVu3ZAyDx2w"  # official @MarvelRivals
 # Title keywords (lowercased) that mark a YouTube upload as noise to skip. Scoped
 # narrowly to genuine ESPORTS-VOD coverage — NOT "tournament"/"vs"/Shorts, because
@@ -74,7 +79,7 @@ class Config:
     gemini_api_key: str | None = None
     gemini_model: str = DEFAULT_GEMINI_MODEL
     official_news_url: str = "https://www.marvelrivals.com/news/"
-    news_check_interval_minutes: int | None = 30
+    news_check_interval_minutes: int | None = DEFAULT_NEWS_CHECK_INTERVAL_MINUTES
     article_timezone: str = "Europe/Kyiv"
     # Discord moderation module (optional, fully independent from the Telegram flow).
     enable_discord_moderation: bool = False
@@ -189,7 +194,9 @@ def load_config() -> Config:
     gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
     official_news_url = os.getenv("OFFICIAL_NEWS_URL", "https://www.marvelrivals.com/news/").strip()
     official_news_url = official_news_url or "https://www.marvelrivals.com/news/"
-    news_check_interval_minutes = _optional_positive_int_or_none("NEWS_CHECK_INTERVAL_MINUTES", 30)
+    news_check_interval_minutes = _optional_positive_int_or_none(
+        "NEWS_CHECK_INTERVAL_MINUTES", DEFAULT_NEWS_CHECK_INTERVAL_MINUTES
+    )
     article_timezone = os.getenv("ARTICLE_TIMEZONE", "Europe/Kyiv").strip() or "Europe/Kyiv"
 
     # Discord values are parsed leniently: a misconfigured Discord setting must never

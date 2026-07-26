@@ -252,7 +252,7 @@ ARTICLE_TIMEZONE=Europe/Kyiv
 - `GEMINI_API_KEY` — enables every AI feature: drafts for all sources, the cross-source duplicate check, and the wiki-facts rubric. Create a key at `https://aistudio.google.com/app/apikey`. Without it the bot still starts and manual submissions still work, but the periodic collector scheduler never starts, a manual `/fetch_news` run stops before drafting with a Ukrainian warning, and the wiki-facts rubric refuses to run.
 - `GEMINI_MODEL` — default `gemini-3.6-flash`, chosen by running the same real articles, social posts, and wiki trivia through several models: it wrote the most natural Ukrainian, fit more of a patch note into the same character budget, and was the fastest.
 - `OFFICIAL_NEWS_URL` — the official news list page, default `https://www.marvelrivals.com/news/`.
-- `NEWS_CHECK_INTERVAL_MINUTES` — the periodic collector tick, default `30`. Empty, non-numeric, `0`, or negative disables scheduled checks. It also requires `GEMINI_API_KEY`.
+- `NEWS_CHECK_INTERVAL_MINUTES` — the periodic collector tick, default `5`. Empty, non-numeric, `0`, or negative disables scheduled checks. It also requires `GEMINI_API_KEY`. A tick over every source costs about two seconds when nothing is new, so this setting is about how stale a post may be rather than about load — at 30 minutes a big announcement could sit undetected for half an hour.
 - `ARTICLE_TIMEZONE` — default `Europe/Kyiv`. It converts article dates **and** is the local timezone every schedule below is evaluated in: the backup hour, the wiki-facts run, and the fan-art digest.
 
 Note that `SUBMISSION_COOLDOWN_SECONDS`, `MIN_SUBMISSION_TEXT_WORDS`, and `MIN_SUBMISSION_TEXT_CHARS` are the only numeric settings that are strict — a negative or non-integer value stops startup. Every other number below is parsed leniently and silently falls back to its default, so a typo can never take the bot down.
@@ -412,6 +412,8 @@ All three commands work in the admin chat or in a DM with the bot, and are liste
 ### The periodic check
 
 When `NEWS_CHECK_INTERVAL_MINUTES` is a positive integer and `GEMINI_API_KEY` is set, a background tick runs every enabled source that belongs to the schedule. Scheduled runs process unseen items from the latest stored publication date in `seen_sources.article_date`, not from the time the bot last parsed the source.
+
+The first tick runs immediately on startup rather than after one interval, so a restart or deploy does not leave the bot blind, and each wait is measured from the start of a run so a slow tick cannot make the schedule drift later and later.
 
 Two things deliberately sit outside that tick, because they are weekly and would otherwise post every interval:
 
