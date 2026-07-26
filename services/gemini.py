@@ -419,6 +419,10 @@ def _normalize_tags(raw_tags: str) -> list[str]:
 
 def _fallback_tags(draft_input: GeminiDraftInput) -> list[str]:
     fallback_tag = t("gemini.fallback_tag")
+    if _is_wiki_fact_source(draft_input):
+        # Keep the stored tags in step with the rubric's public hashtags.
+        return [fallback_tag, t("collectors.wiki_facts.tag")]
+
     tags = [fallback_tag]
     lowered = f"{draft_input.title}\n{draft_input.body_text}".lower()
     keyword_tags = {
@@ -443,6 +447,10 @@ def _fallback_tags(draft_input: GeminiDraftInput) -> list[str]:
 
 def _is_official_source(draft_input: GeminiDraftInput) -> bool:
     return draft_input.source_type in OFFICIAL_SOURCE_TYPES
+
+
+def _is_wiki_fact_source(draft_input: GeminiDraftInput) -> bool:
+    return draft_input.source_type in WIKI_FACT_SOURCE_TYPES
 
 
 def _prepare_official_draft(
@@ -472,6 +480,12 @@ def _sanitize_official_public_draft(draft: str, draft_input: GeminiDraftInput) -
 def _public_hashtag_line(draft_input: GeminiDraftInput) -> str:
     if _is_official_source(draft_input):
         return " ".join(_official_hashtags(draft_input))
+
+    # The trivia rubric gets its own fixed tag. The news topic rules are keyed on
+    # patch/event/shop wording that comic-history trivia never contains, so it fell
+    # through to the "#Анонс" default — labelling a 1941 comics fact an announcement.
+    if _is_wiki_fact_source(draft_input):
+        return t("collectors.wiki_facts.hashtags")
 
     # Non-official (social/short-form) posts get the base tag PLUS the same topic
     # tags, just without the #Офіційно marker, so they are tagged too — not bare.

@@ -213,6 +213,8 @@
       "source_name": "Marvel Rivals Wiki (CC BY-SA)",
       "username": "wiki_facts_collector",
       "fact_title": "Цікавий факт про {hero}",
+      "hashtags": "#MarvelRivalsUA #ЧиЗналиВи",
+      "tag": "чизналиви",
       "errors": {
         "missing_gemini_api_key": "GEMINI_API_KEY відсутній. Рубрика wiki-фактів пропускає AI-генерацію чернеток."
       }

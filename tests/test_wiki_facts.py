@@ -12,7 +12,14 @@ from services.collectors.base import ListingEntry
 from services.collectors.runner import BaseNewsCollector
 from services.collectors.wiki_facts.client import WikiFact, _clean_fact, _extract_facts
 from services.collectors.wiki_facts.collector import WikiFactsCollector, _fact_id
-from services.gemini import GeminiDraftInput, _build_prompt, _select_prompt_template, _load_wiki_fact_prompt_template
+from services.gemini import (
+    GeminiDraftInput,
+    _build_prompt,
+    _fallback_tags,
+    _load_wiki_fact_prompt_template,
+    _public_hashtag_line,
+    _select_prompt_template,
+)
 from services.i18n import t
 
 
@@ -246,3 +253,62 @@ def test_wiki_fact_prompt_is_selected_and_renders() -> None:
     assert "Magik can teleport" in prompt
     assert "CC BY-SA" in prompt
     assert "ВАЖЛИВО ПРО БЕЗПЕКУ" in prompt
+
+
+def _wiki_draft_input(title: str, body: str) -> GeminiDraftInput:
+    return GeminiDraftInput(
+        title=title,
+        article_url="https://w/Hero",
+        article_date_display=None,
+        datetime_notes="",
+        body_text=body,
+        source_type="wiki_facts",
+        source_name="Marvel Rivals Wiki (CC BY-SA)",
+    )
+
+
+def test_wiki_fact_uses_its_own_rubric_hashtag() -> None:
+    # A comics-history fact matches no news topic rule, so it used to fall through
+    # to the "#Анонс" default — calling a 1941 comic debut an announcement.
+    draft_input = _wiki_draft_input(
+        "Цікавий факт про Winter Soldier",
+        'Bucky Barnes first appeared in "Captain America Comics" #1 in 1941.',
+    )
+    line = _public_hashtag_line(draft_input)
+
+    assert line == "#MarvelRivalsUA #ЧиЗналиВи"
+    assert "#Анонс" not in line
+
+
+def test_wiki_fact_hashtag_ignores_incidental_news_keywords() -> None:
+    # A fact mentioning a hero/skin/map must still be tagged as trivia, not as a
+    # skin or map news post.
+    draft_input = _wiki_draft_input(
+        "Цікавий факт про Magik",
+        "This hero's costume design references a map from the Limbo season of the comics.",
+    )
+    assert _public_hashtag_line(draft_input) == "#MarvelRivalsUA #ЧиЗналиВи"
+
+
+def test_wiki_fact_stored_tags_match_the_rubric() -> None:
+    draft_input = _wiki_draft_input("Цікавий факт про Magik", "Magik wields the Soulsword.")
+    assert _fallback_tags(draft_input) == ["marvelrivalsua", "чизналиви"]
+
+
+def test_non_wiki_short_form_tagging_is_unchanged() -> None:
+    # The trivia branch must not alter how the social/leak sources are tagged.
+    social = GeminiDraftInput(
+        title="New skin bundle",
+        article_url="https://bsky.app/x",
+        article_date_display=None,
+        datetime_notes="",
+        body_text="A new costume bundle arrives in the shop.",
+        source_type="bluesky",
+        source_name="Bluesky Marvel Rivals",
+    )
+    line = _public_hashtag_line(social)
+
+    assert line.startswith("#MarvelRivalsUA")
+    assert "#Скіни" in line
+    assert "#ЧиЗналиВи" not in line
+    assert "чизналиви" not in _fallback_tags(social)
