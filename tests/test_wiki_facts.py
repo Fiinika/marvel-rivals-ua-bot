@@ -6,12 +6,14 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import handlers.admin as admin
 import services.collectors.wiki_facts.collector as wiki_collector
 from services.collectors.base import ListingEntry
 from services.collectors.runner import BaseNewsCollector
 from services.collectors.wiki_facts.client import WikiFact, _clean_fact, _extract_facts
 from services.collectors.wiki_facts.collector import WikiFactsCollector, _fact_id
 from services.gemini import GeminiDraftInput, _build_prompt, _select_prompt_template, _load_wiki_fact_prompt_template
+from services.i18n import t
 
 
 def test_extract_facts_cleans_wikitext() -> None:
@@ -87,6 +89,99 @@ def _collector(facts: dict[str, list[WikiFact]], *, db: _FakeDB | None = None) -
     )
     collector.client = _StubClient(facts)
     return collector
+
+
+# --- the /wikifact admin command -------------------------------------------------
+
+
+class _FakeMessage:
+    def __init__(self, *, user_id: int = 7, chat_id: int = 100, chat_type: str = "private") -> None:
+        self.from_user = SimpleNamespace(id=user_id, username="admin")
+        self.chat = SimpleNamespace(id=chat_id, type=chat_type)
+        self.answers: list[str] = []
+
+    async def answer(self, text: str) -> None:
+        self.answers.append(text)
+
+
+def _wiki_config(*, enabled: bool = True, gemini_key: str = "k", admins=frozenset({7})) -> SimpleNamespace:
+    return SimpleNamespace(
+        enable_wiki_facts=enabled,
+        gemini_api_key=gemini_key,
+        admin_user_ids=admins,
+        admin_chat_id=100,
+    )
+
+
+def _run_command(monkeypatch, message: _FakeMessage, config: SimpleNamespace, result) -> list[str]:
+    calls: list[str] = []
+
+    async def fake_run(bot, cfg, db):
+        calls.append("ran")
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(admin, "run_wiki_facts_once", fake_run)
+    asyncio.run(admin.wiki_fact_command(message, bot=None, config=config, db=None))
+    return calls
+
+
+def test_wikifact_reports_the_rubric_being_switched_off(monkeypatch) -> None:
+    # The whole point of the command: a disabled rubric is diagnosable from Telegram
+    # instead of only from the server log at startup.
+    message = _FakeMessage()
+    calls = _run_command(monkeypatch, message, _wiki_config(enabled=False), True)
+
+    assert calls == []  # never touches the wiki when the feature is off
+    assert message.answers == [t("admin.wiki_fact.disabled")]
+    assert "ENABLE_WIKI_FACTS" in message.answers[0]
+
+
+def test_wikifact_reports_a_missing_gemini_key(monkeypatch) -> None:
+    message = _FakeMessage()
+    calls = _run_command(monkeypatch, message, _wiki_config(gemini_key=""), True)
+
+    assert calls == []
+    assert message.answers == [t("admin.wiki_fact.no_gemini")]
+
+
+def test_wikifact_queues_a_fact(monkeypatch) -> None:
+    message = _FakeMessage()
+    calls = _run_command(monkeypatch, message, _wiki_config(), True)
+
+    assert calls == ["ran"]
+    assert message.answers == [t("admin.wiki_fact.started"), t("admin.wiki_fact.queued")]
+
+
+def test_wikifact_reports_when_nothing_was_queued(monkeypatch) -> None:
+    message = _FakeMessage()
+    _run_command(monkeypatch, message, _wiki_config(), False)
+
+    assert message.answers == [t("admin.wiki_fact.started"), t("admin.wiki_fact.skipped")]
+
+
+def test_wikifact_reports_a_failed_run(monkeypatch) -> None:
+    message = _FakeMessage()
+    _run_command(monkeypatch, message, _wiki_config(), RuntimeError("wiki down"))
+
+    assert message.answers == [t("admin.wiki_fact.started"), t("admin.wiki_fact.failed")]
+
+
+def test_wikifact_rejects_non_admins(monkeypatch) -> None:
+    message = _FakeMessage(user_id=999)
+    calls = _run_command(monkeypatch, message, _wiki_config(), True)
+
+    assert calls == []
+    assert message.answers == [t("admin.wiki_fact.no_permission")]
+
+
+def test_wikifact_rejects_a_non_admin_group_chat(monkeypatch) -> None:
+    message = _FakeMessage(chat_id=555, chat_type="supergroup")
+    calls = _run_command(monkeypatch, message, _wiki_config(), True)
+
+    assert calls == []
+    assert message.answers == [t("admin.wiki_fact.wrong_chat")]
 
 
 def test_collector_opts_out_of_cross_source_dedup() -> None:

@@ -29,6 +29,7 @@ from services.collectors.registry import (
     get_collector_definition,
     list_collector_definitions,
 )
+from services.collectors.wiki_facts.collector import run_wiki_facts_once
 from services.digests.fanart import run_fanart_digest_once
 from services.formatter import format_admin_preview
 from services.i18n import t
@@ -199,6 +200,42 @@ async def fanart_digest_command(
         return
 
     await message.answer(t("admin.fanart_digest.queued") if created else t("admin.fanart_digest.skipped"))
+
+
+@router.message(AdminOrPrivateChatFilter(), Command("wikifact"))
+async def wiki_fact_command(message: Message, bot: Bot, config: Config, db: Database) -> None:
+    """Queue one "Чи знали ви?" fact on demand.
+
+    The rubric is not a registry collector, so it never appears in the /fetch_news
+    menu and otherwise only runs on its weekly schedule — this is the only way to
+    test it, and the only way to tell from Telegram whether it is switched on.
+    """
+    if message.from_user is None or message.from_user.id not in config.admin_user_ids:
+        await message.answer(t("admin.wiki_fact.no_permission"))
+        return
+
+    if message.chat.id != config.admin_chat_id and _chat_type(message) != "private":
+        await message.answer(t("admin.wiki_fact.wrong_chat"))
+        return
+
+    # Report the same two conditions the weekly scheduler checks at startup, so a
+    # silent "the rubric never posts" is diagnosable without reading server logs.
+    if not config.enable_wiki_facts:
+        await message.answer(t("admin.wiki_fact.disabled"))
+        return
+    if not config.gemini_api_key:
+        await message.answer(t("admin.wiki_fact.no_gemini"))
+        return
+
+    await message.answer(t("admin.wiki_fact.started"))
+    try:
+        created = await run_wiki_facts_once(bot, config, db)
+    except Exception:
+        logger.exception("Manual wiki-facts run failed")
+        await message.answer(t("admin.wiki_fact.failed"))
+        return
+
+    await message.answer(t("admin.wiki_fact.queued") if created else t("admin.wiki_fact.skipped"))
 
 
 @router.callback_query(CollectorCallback.filter())
