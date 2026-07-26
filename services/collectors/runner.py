@@ -308,7 +308,7 @@ class BaseNewsCollector(ABC):
                     original_text=candidate.original_text,
                     draft_text=draft_parts[0],
                     draft_parts=draft_parts,
-                    message_type="photo" if candidate.has_media else "text",
+                    message_type=_part_message_type(candidate),
                     media_url=candidate.media_url if candidate.has_media else None,
                     media_type=candidate.media_type if candidate.has_media else "none",
                     source_type=self.definition.source_type,
@@ -348,6 +348,19 @@ class BaseNewsCollector(ABC):
             source_url,
         )
         return True
+
+
+def _part_message_type(candidate: DraftCandidate) -> str:
+    """The stored part type, which both the moderation preview and the publisher
+    route on.
+
+    It has to follow the candidate's media_type: a video stored as "photo" is sent
+    with send_photo, which Telegram rejects for an MP4, so the post could only ever
+    degrade to text — the native-video download path is keyed on "video".
+    """
+    if not candidate.has_media:
+        return "text"
+    return "video" if candidate.media_type == "video" else "photo"
 
 
 def _album_images(candidate: DraftCandidate) -> list[str]:

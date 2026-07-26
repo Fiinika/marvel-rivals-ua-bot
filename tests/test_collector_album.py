@@ -84,6 +84,59 @@ def _run(candidate: DraftCandidate, parts: list[str], monkeypatch) -> tuple[_Fak
     return db, sent
 
 
+def _video_candidate() -> DraftCandidate:
+    return DraftCandidate(
+        source_id="v1",
+        source_url="https://bsky.app/profile/x/post/1",
+        title="t",
+        body_text="b",
+        source_name="Bluesky",
+        username="u",
+        original_text="o",
+        has_media=True,
+        media_url="https://pds.bsky.network/xrpc/com.atproto.sync.getBlob?did=d&cid=c",
+        media_type="video",
+        additional_media_urls=None,
+    )
+
+
+def test_video_candidate_is_stored_as_a_video_part(monkeypatch) -> None:
+    # Both the moderation preview and the publisher route on message_type, and the
+    # native-video download path is keyed on "video". Stored as "photo" (the old
+    # behaviour) a Bluesky MP4 went to send_photo and could only degrade to text.
+    db, _sent = _run(_video_candidate(), ["draft"], monkeypatch)
+
+    assert db.album is None and db.single is not None
+    assert db.single["message_type"] == "video"
+    assert db.single["media_type"] == "video"
+
+
+def test_video_part_reaches_the_native_download_path(monkeypatch) -> None:
+    from services.publisher import needs_external_video_download
+
+    db, _sent = _run(_video_candidate(), ["draft"], monkeypatch)
+    part = {
+        "message_type": db.single["message_type"],
+        "source_type": db.single["source_type"],
+        "media_url": db.single["media_url"],
+        "file_id": None,
+    }
+
+    assert needs_external_video_download(part) is True
+
+
+def test_photo_candidate_is_still_stored_as_a_photo_part(monkeypatch) -> None:
+    db, _sent = _run(_candidate(["https://cdn.bsky.app/a.jpg"]), ["draft"], monkeypatch)
+
+    assert db.single["message_type"] == "photo"
+
+
+def test_text_candidate_is_still_stored_as_text(monkeypatch) -> None:
+    db, _sent = _run(_candidate([]), ["draft"], monkeypatch)
+
+    assert db.single["message_type"] == "text"
+
+
 def test_two_photos_single_part_creates_album(monkeypatch) -> None:
     db, sent = _run(_candidate(["a", "b", "c"]), ["caption"], monkeypatch)
     assert db.album is not None and db.single is None

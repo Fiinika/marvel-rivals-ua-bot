@@ -206,9 +206,9 @@ async def fanart_digest_command(
 async def wiki_fact_command(message: Message, bot: Bot, config: Config, db: Database) -> None:
     """Queue one "Чи знали ви?" fact on demand.
 
-    The rubric is not a registry collector, so it never appears in the /fetch_news
-    menu and otherwise only runs on its weekly schedule — this is the only way to
-    test it, and the only way to tell from Telegram whether it is switched on.
+    The rubric also has a /fetch_news button, but only this command reports WHY it
+    is idle: the button simply disappears when the rubric is off, while this replies
+    with the failing precondition (ENABLE_WIKI_FACTS or GEMINI_API_KEY).
     """
     if message.from_user is None or message.from_user.id not in config.admin_user_ids:
         await message.answer(t("admin.wiki_fact.no_permission"))

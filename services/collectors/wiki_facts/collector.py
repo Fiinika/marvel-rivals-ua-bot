@@ -1,11 +1,13 @@
 """Weekly "Чи знали ви?" hero-trivia rubric, sourced from the Marvel Rivals Fandom
 wiki (CC BY-SA).
 
-Unlike the per-tick news collectors this is NOT registered in the registry; it runs
-on its own weekly schedule (like the fan-art digest) and reuses the shared
-BaseNewsCollector pipeline so each English trivia fact is translated to Ukrainian by
-Gemini and queued for moderation, credited to the wiki with a link to the source
-page. It opts out of cross-source dedup (a fact is not a news story).
+It is registered in the registry with scheduled=False: that keeps it out of the
+per-tick news run (which would post a fact every interval instead of weekly) while
+still offering it as a manual /fetch_news button. It runs on its own weekly
+schedule, like the fan-art digest, and reuses the shared BaseNewsCollector pipeline
+so each English trivia fact is translated to Ukrainian by Gemini and queued for
+moderation, credited to the wiki with a link to the source page. It opts out of
+cross-source dedup (a fact is not a news story).
 """
 
 from __future__ import annotations
