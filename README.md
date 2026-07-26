@@ -1,75 +1,112 @@
 # Marvel Rivals UA Submission Bot
 
-MVP Telegram bot for a Ukrainian Marvel Rivals community. Users send text, links, photos, videos, or documents to the bot. The bot stores each submission in SQLite, sends it to a private admin moderation chat, and lets approved admins publish accepted submissions to a public Telegram channel or group.
+Telegram bot for a Ukrainian Marvel Rivals community. It gathers content from six sources, turns each item into a Ukrainian draft with Gemini, and routes everything — collected news and manual user submissions alike — through one admin moderation queue. Nothing is ever published automatically: an admin approves, edits, or rejects each post before it reaches the public channel. The same bot also moderates the community's Telegram group chat, and can optionally run a Discord moderation bot in the same process.
 
 ## What It Does
 
-- Accepts manual user submissions:
-  - plain text
-  - links
-  - photos with optional captions
-  - videos with optional captions
-  - documents with optional captions
-- Stores submissions in SQLite with `pending`, `published`, or `rejected` status.
-- Sends the proposed post part or parts to the moderation chat first, then a separate metadata/control message with inline buttons.
-- Allows only configured admin user IDs to approve, reject, or edit.
-- Publishes approved text or original media to the configured public chat.
-- Handles manual long media captions by publishing the media first, then the draft text as a separate message. Official-news drafts are intentionally short to avoid moderation spam, and media captions fall back to a separate text draft when needed.
-- Supports part-based editing, adding new post parts, and `/cancel` for active edit prompts.
-- Limits user submissions with configurable per-user cooldown.
-- Fetches the official Marvel Rivals news page and creates Ukrainian Gemini drafts for new articles.
-- Sends every AI-generated official news draft to the same admin moderation queue as manual submissions.
-- Tracks already moderated official articles in SQLite to avoid duplicate drafts.
-- Supports official news cover images/photos when safe media URLs are detected, with extra images reserved for relevant later parts instead of being spammed.
+**Collects content from six sources** (each item becomes a pending draft, never an automatic post):
+
+- the official Marvel Rivals news site — always on, the only source that cannot be switched off
+- Bluesky, the official account — short announcements with images or native video
+- YouTube, the official channel — trailers and reveals, published with a playable video
+- Reddit leaks (`r/MarvelRivalsLeaks`) — datamines, explicitly framed as rumours
+- rivalskins.com — upcoming skin renders, also framed as rumours
+- the Marvel Rivals Fandom wiki — hero trivia for the weekly "Чи знали ви?" rubric
+
+Every source except the official site is opt-in and off by default.
+
+**Runs two weekly rubrics on their own schedules:**
+
+- a fan-art digest — the week's top `r/MarvelRivals` art as one credited Telegram album
+- the "Чи знали ви?" trivia rubric — one wiki fact, translated to Ukrainian, credited CC BY-SA
+
+**Accepts manual user submissions** — plain text, links, photos, videos, and documents with optional captions — rate-limited per user and filtered for too-short throwaway messages.
+
+**Moderates everything in one queue:**
+
+- each submission is stored in SQLite as `pending`, `published`, or `rejected`
+- the moderation chat shows the publishable post parts first, then a separate metadata/control message with `✅ Approve` / `✏️ Edit` / `❌ Reject`
+- only user IDs listed in `ADMIN_USER_IDS` may act on the buttons
+- admins can edit any part, add new parts, and cancel an active edit with `/cancel`
+- `/fetch_news`, `/fanartdigest`, and `/wikifact` trigger a source or rubric on demand
+
+**Avoids duplicates twice over:** every source tracks what it has already seen, and an optional Gemini check drops an item that retells a story another source already delivered.
+
+**Handles media properly:** article cover photos, multi-image posts as Telegram albums, and YouTube/Bluesky videos downloaded and re-uploaded so they play inline instead of appearing as a link.
+
+**Moderates the community chat** on Telegram (anti-flood, invite/scam/bad-word filters, warnings with auto-mutes, reports, welcome messages) and optionally on Discord.
+
+**Keeps itself running:** nightly SQLite backups on the server, and a GitHub Actions pipeline that builds a Docker image and rolls it out over SSH.
 
 ## What It Does Not Do Yet
 
-The bot still keeps publication fully manual. It does not implement:
+Publication stays fully manual by design — the bot never posts without an admin pressing Approve. Beyond that, it does not implement:
 
-- Reddit parsing
-- auto-posting
-- gaming media source parsing
-- video parsing for official news posts
+- webhook mode (Telegram long polling only)
+- role management inside Telegram (admin access comes only from `ADMIN_USER_IDS`)
+- video parsing for the official news site (that source is photo-only; Bluesky and YouTube do carry video)
 
-The code is split into handlers and services so future sources can be added without creating a separate moderation flow.
+Each source is a `BaseNewsCollector` subclass registered in `services/collectors/registry.py`, so a new one reuses the whole moderation, dedup, and publishing flow.
 
 ## Project Structure
 
 ```text
-main.py
-config.py
-database.py
-discord_moderation.py
-discord_badwords.txt
-keyboards.py
+main.py                      entrypoint: config, DB, routers, command menus, background tasks
+config.py                    the frozen Config dataclass and load_config()
+database.py                  aiosqlite layer (submissions, parts, seen_sources, tags, warnings)
+keyboards.py                 inline keyboards and callback data
+discord_moderation.py        optional, self-contained Discord moderation bot
 handlers/
-  user.py
-  admin.py
+  user.py                    private-DM submission flow
+  admin.py                   moderation queue, part editing, admin commands
+  moderation.py              Telegram group-chat moderation router
 services/
   collectors/
-    base.py
-    registry.py
-    official_marvel_rivals/
-      article_parser.py
-      collector.py
-      news_fetcher.py
-  date_utils.py
-  i18n.py
-  formatter.py
-  gemini.py
-  media_parser.py
-  moderation.py
-  post_footer.py
-  publisher.py
+    base.py                  lightweight collector types shared with the UI
+    runner.py                BaseNewsCollector: the orchestration engine every source subclasses
+    registry.py              source registry, enable gates, and the periodic tick
+    throttle.py              minimum gap between moderation sends within one tick
+    official_marvel_rivals/  news_fetcher.py, article_parser.py, collector.py
+    bluesky/                 feed_fetcher.py, video.py (getBlob MP4), collector.py
+    youtube/                 feed_fetcher.py (channel Atom feed), collector.py
+    reddit/                  feed_fetcher.py (flair search.rss), collector.py
+    rivalskins/              feed_fetcher.py (WordPress RSS), collector.py
+    wiki_facts/              client.py (Fandom api.php), collector.py + weekly scheduler
+  digests/
+    fanart.py                weekly fan-art album digest
+  chat_moderation.py         pure Telegram moderation rules (no aiogram)
+  date_utils.py              article date/timezone parsing
+  db_backup.py               nightly VACUUM INTO snapshots
+  formatter.py               admin moderation preview
+  gemini.py                  prompts, drafts, hashtags, cross-source dedup verdict
+  i18n.py                    JSON translation lookup
+  media_parser.py            article image extraction
+  moderation.py              sending a submission into the moderation chat
+  post_footer.py             community footer and source attribution
+  publisher.py               publishing: text, photo, album, native video
+  telegram_retry.py          retries, timeouts, inter-message spacing
+  youtube_video.py           yt-dlp download for native video re-upload
 prompts/
-  gemini_news_uk.md
-  official_news_style.md
+  gemini_news_uk.md          long-form official article draft
+  gemini_shortform_uk.md     concise social/leak posts
+  gemini_wiki_fact_uk.md     "Чи знали ви?" trivia
+  gemini_dedup_uk.md         cross-source duplicate-title judge
+  official_news_style.md     editable style guide injected into the news prompt
 locales/
-  uk.json
-README.md
+  uk.json                    every user-visible string
+scripts/
+  deploy-remote.sh           remote rollout streamed over SSH by the deploy workflow
+  setup_lft_forum.py         one-off Discord LFT forum setup helper
+tests/                       pytest suite (one module per subsystem)
+.github/workflows/           ci.yml (compile, import, pytest, ruff) and deploy.yml
+Dockerfile                   python:3.12-slim image, unprivileged, no inbound ports
+docker-compose.prod.yml      production composition with the botdata volume
+telegram_rules.txt           editable chat rules shown in the welcome message
+telegram_badwords.txt        editable blocked-word list for Telegram moderation
+discord_rules.txt            editable Discord rules
+discord_badwords.txt         editable blocked-word list for Discord moderation
 requirements.txt
 .env.example
-.gitignore
 ```
 
 ## Create a Bot With BotFather
@@ -184,14 +221,24 @@ python -m pip install -r requirements.txt
 
 ## Create `.env`
 
-Copy `.env.example` to `.env` and fill in real values:
+Copy `.env.example` to `.env` and fill in real values. `.env.example` lists every variable the bot reads; the groups below explain what each one does.
+
+Only four variables are required. A missing or unparseable one raises a configuration error and the bot exits:
 
 ```env
 BOT_TOKEN=1234567890:your_real_token_here
 ADMIN_CHAT_ID=-1001234567890
 PUBLISH_CHAT_ID=-1009876543210
 ADMIN_USER_IDS=111111111,222222222
+```
+
+### Core settings
+
+```env
+DATABASE_PATH=bot.db
 SUBMISSION_COOLDOWN_SECONDS=120
+MIN_SUBMISSION_TEXT_WORDS=3
+MIN_SUBMISSION_TEXT_CHARS=10
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.5-flash
 OFFICIAL_NEWS_URL=https://www.marvelrivals.com/news/
@@ -199,27 +246,87 @@ NEWS_CHECK_INTERVAL_MINUTES=30
 ARTICLE_TIMEZONE=Europe/Kyiv
 ```
 
-Optional:
+- `DATABASE_PATH` — SQLite file path. Omitted, it creates `bot.db` in the project directory. **In production this value is ignored:** the image and `docker-compose.prod.yml` pin it to `/data/bot.db` on the persistent volume, and the deploy workflow deliberately does not forward it.
+- `SUBMISSION_COOLDOWN_SECONDS` — per-user minimum gap between submissions, default `120`. `0` disables it, and `ADMIN_USER_IDS` always bypass it.
+- `MIN_SUBMISSION_TEXT_WORDS` / `MIN_SUBMISSION_TEXT_CHARS` — a plain-text submission shorter than either limit is bounced with a hint instead of reaching the queue. Defaults `3` and `10`; `0` disables that half of the check. Links, media, and admins are exempt.
+- `GEMINI_API_KEY` — enables every AI feature: drafts for all sources, the cross-source duplicate check, and the wiki-facts rubric. Create a key at `https://aistudio.google.com/app/apikey`. Without it the bot still starts and manual submissions still work, but the periodic collector scheduler never starts, a manual `/fetch_news` run stops before drafting with a Ukrainian warning, and the wiki-facts rubric refuses to run.
+- `GEMINI_MODEL` — default `gemini-2.5-flash`.
+- `OFFICIAL_NEWS_URL` — the official news list page, default `https://www.marvelrivals.com/news/`.
+- `NEWS_CHECK_INTERVAL_MINUTES` — the periodic collector tick, default `30`. Empty, non-numeric, `0`, or negative disables scheduled checks. It also requires `GEMINI_API_KEY`.
+- `ARTICLE_TIMEZONE` — default `Europe/Kyiv`. It converts article dates **and** is the local timezone every schedule below is evaluated in: the backup hour, the wiki-facts run, and the fan-art digest.
+
+Note that `SUBMISSION_COOLDOWN_SECONDS`, `MIN_SUBMISSION_TEXT_WORDS`, and `MIN_SUBMISSION_TEXT_CHARS` are the only numeric settings that are strict — a negative or non-integer value stops startup. Every other number below is parsed leniently and silently falls back to its default, so a typo can never take the bot down.
+
+Boolean flags accept `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`, case-insensitively. **Any other value keeps the default** rather than being read as false.
+
+### Operations
 
 ```env
-DATABASE_PATH=bot.db
+ENABLE_DATABASE_BACKUP=true
+DATABASE_BACKUP_HOUR=4
+DATABASE_BACKUP_KEEP=14
+ENABLE_CROSS_SOURCE_DEDUP=true
+CROSS_SOURCE_DEDUP_TITLE_LIMIT=200
+MODERATION_SEND_INTERVAL_SECONDS=5
 ```
 
-If `DATABASE_PATH` is omitted, the bot creates `bot.db` in the project directory.
+- `ENABLE_DATABASE_BACKUP` — **on by default.** Once a night the bot writes a `VACUUM INTO` snapshot to a `backups/` folder next to the database and prunes old ones. On the server that is `/data/backups` on the `botdata` volume.
+- `DATABASE_BACKUP_HOUR` — local hour of the snapshot, default `4`.
+- `DATABASE_BACKUP_KEEP` — how many snapshots to keep, default `14`. `0` is coerced back to `14`; you cannot keep none.
+- `ENABLE_CROSS_SOURCE_DEDUP` — **on by default.** Before queueing an item, Gemini compares its title against recently seen titles from *other* sources and drops a retelling of a story already delivered. It fails open: any error keeps the item.
+- `CROSS_SOURCE_DEDUP_TITLE_LIMIT` — how many recent titles are compared, default `200`. `0` disables the check.
+- `MODERATION_SEND_INTERVAL_SECONDS` — minimum gap between moderation sends inside one tick, shared across all sources, default `5`. `0` disables the pacing. A manual `/fetch_news` run is never delayed.
 
-`SUBMISSION_COOLDOWN_SECONDS` controls how often one Telegram user may submit content. The default is `120`. Set it to `0` to disable the limit.
+### News sources
 
-`GEMINI_API_KEY` enables AI draft generation for official news. Create a key in Google AI Studio at `https://aistudio.google.com/app/apikey`, then paste it into `.env`. If this value is missing, the bot still starts and manual submissions still work; the collector logs a clear warning and skips AI draft generation.
+Every source here is off by default. The official site needs no flag and cannot be disabled.
 
-`GEMINI_MODEL` controls which Gemini model creates Ukrainian Telegram drafts. The recommended default is `gemini-2.5-flash`. The prompt asks Gemini to create concise, readable posts, convert UTC schedules to Kyiv time when reliable, and follow the glossary rules in `prompts/gemini_news_uk.md`.
+```env
+ENABLE_BLUESKY_SOURCE=false
+BLUESKY_ACTOR=marvelrivalsglobal.bsky.social
+ENABLE_BLUESKY_VIDEO_DOWNLOAD=true
+BLUESKY_VIDEO_MAX_MB=48
 
-`OFFICIAL_NEWS_URL` controls the official Marvel Rivals news list URL. The default is `https://www.marvelrivals.com/news/`.
+ENABLE_YOUTUBE_SOURCE=false
+YOUTUBE_CHANNEL_ID=UCWzmOSSiSPbVnVu3ZAyDx2w
+YOUTUBE_EXCLUDE_KEYWORDS=
+ENABLE_YOUTUBE_VIDEO_DOWNLOAD=true
+YOUTUBE_VIDEO_MAX_MB=48
 
-`NEWS_CHECK_INTERVAL_MINUTES` enables the background collector scheduler when it is a positive integer and `GEMINI_API_KEY` is set. The default is `30`. Leave it empty or set an invalid value to disable automatic scheduled checks.
+ENABLE_REDDIT_SOURCE=false
+REDDIT_SUBREDDIT=MarvelRivalsLeaks
+REDDIT_FLAIRS=
+REDDIT_EXCLUDE_KEYWORDS=
 
-`ARTICLE_TIMEZONE` controls article date conversion for admin metadata and reliable in-article schedules. The default is `Europe/Kyiv`; public event/shop/patch/maintenance times are shown as Kyiv time with `за Києвом` wording when conversion is reliable.
+ENABLE_RIVALSKINS_SOURCE=false
+RIVALSKINS_FEED_URL=https://rivalskins.com/category/leaks/feed/
 
-The community navigation footer is always appended to every published post. Its labels and URLs both live in `locales/uk.json` under `post_footer.links` — there is no environment variable for it. See [Official News Collector](#official-news-collector) for details.
+ENABLE_WIKI_FACTS=false
+WIKI_FACTS_API_URL=https://marvelrivals.fandom.com/api.php
+WIKI_FACTS_WEEKDAY=0
+WIKI_FACTS_HOUR=12
+
+ENABLE_FANART_DIGEST=false
+FANART_SUBREDDIT=MarvelRivals
+FANART_FLAIR=Fan Art
+FANART_DIGEST_WEEKDAY=4
+FANART_DIGEST_HOUR=18
+FANART_DIGEST_COUNT=10
+```
+
+- `BLUESKY_ACTOR` — the handle whose public feed is polled, default the official `marvelrivalsglobal.bsky.social`.
+- `ENABLE_BLUESKY_VIDEO_DOWNLOAD` (**on by default**) — resolves a video post to its original MP4 and re-uploads it as a native Telegram video. Off, or above `BLUESKY_VIDEO_MAX_MB` (default `48`), the post degrades to text.
+- `YOUTUBE_CHANNEL_ID` — default `UCWzmOSSiSPbVnVu3ZAyDx2w`, the official @MarvelRivals channel.
+- `YOUTUBE_EXCLUDE_KEYWORDS` — a comma-separated title blocklist, matched case-insensitively as substrings. Left empty it keeps the built-in esports-VOD list (`grand final`, `group stage`, `playoff`, `qualifier`, `invitational`, `highlights`, `esports`). Any value you set **replaces** that list; `-` or `none` disables filtering.
+- `ENABLE_YOUTUBE_VIDEO_DOWNLOAD` (**on by default**) — downloads the video with yt-dlp and re-uploads it natively, up to `YOUTUBE_VIDEO_MAX_MB` (default `48`). Off or too large, the post falls back to a large playable link preview.
+- `REDDIT_SUBREDDIT` — without the `r/` prefix, default `MarvelRivalsLeaks`.
+- `REDDIT_FLAIRS` — comma-separated flairs combined with `OR` into one search query. Empty keeps the default `Official News,Reliable,Confirmed`.
+- `REDDIT_EXCLUDE_KEYWORDS` — title blocklist, default `megathread` (recurring sticky threads). `-` or `none` disables it.
+- `WIKI_FACTS_WEEKDAY` / `WIKI_FACTS_HOUR` — when the trivia rubric runs, default Monday (`0`) at `12`:00. Weekdays are `0`=Monday … `6`=Sunday. The rubric also needs `GEMINI_API_KEY`.
+- `FANART_DIGEST_WEEKDAY` / `FANART_DIGEST_HOUR` — when the digest runs, default Friday (`4`) at `18`:00.
+- `FANART_DIGEST_COUNT` — images per album, default `10`, hard-capped at Telegram's media-group maximum of 10.
+
+The community navigation footer is always appended to every published post. Its labels and URLs both live in `locales/uk.json` under `post_footer.links` — there is no environment variable for it. See [Content Sources](#content-sources) for details.
 
 ## Run Locally
 
@@ -251,25 +358,65 @@ On startup the bot validates required environment variables, initializes SQLite 
 13. Try clicking a button from a Telegram user ID not listed in `ADMIN_USER_IDS`. The bot should show an alert and do nothing.
 14. Send two submissions from the same user within `SUBMISSION_COOLDOWN_SECONDS`. The second one should be rejected with a wait message.
 
-## Official News Collector
+## Content Sources
 
-The official news collector reads `https://www.marvelrivals.com/news/`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and a safe cover image/photo when available, then asks Gemini to create a Ukrainian Telegram-ready draft. Drafts are intentionally concise, usually one moderation post around 400-900 characters, so a long article does not become a noisy 6-10 part moderation batch.
+Six sources are registered in `services/collectors/registry.py`. Each is a `BaseNewsCollector` subclass, so they all share the same pipeline: fetch a listing, skip what has already been seen, ask Gemini for a Ukrainian draft, and queue it for moderation.
 
-The generated public draft includes only publishable post content and official hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata. Public posts do not show raw source URLs; source attribution is rendered as `Повні деталі — на офіційному сайті.`, where `офіційному сайті` is a Telegram HTML link to the stored `source_url`.
+| Source | Enabled by | What it brings | Media |
+| --- | --- | --- | --- |
+| Official site | always on | patch notes, announcements, events | cover photo |
+| Bluesky | `ENABLE_BLUESKY_SOURCE` | short official announcements | photos, album, native video |
+| YouTube | `ENABLE_YOUTUBE_SOURCE` | trailers and reveals | native video, else playable preview |
+| Reddit leaks | `ENABLE_REDDIT_SOURCE` | datamines, framed as rumours | photo |
+| RivalSkins | `ENABLE_RIVALSKINS_SOURCE` | upcoming skin renders, rumours | photo |
+| Wiki facts | `ENABLE_WIKI_FACTS` | weekly "Чи знали ви?" trivia | text only |
 
-Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the existing admin moderation queue with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When a draft must be split, the parts stay under one metadata/control message, but official news is biased toward one concise preview. Admins can edit each part before publishing.
+Reddit and RivalSkins are the only rumour-framed sources: Gemini is explicitly told to present the item as an unofficial leak that developers have not confirmed, so a datamine never reads like an announcement.
 
-Run a manual check from an allowed admin account:
+The official news collector reads `OFFICIAL_NEWS_URL`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and a safe cover image when available, then asks Gemini for a Ukrainian Telegram-ready draft. Official drafts are intentionally concise, usually one moderation post around 400-900 characters, so a long article does not become a noisy 6-10 part moderation batch.
+
+The generated public draft includes only publishable post content and hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata. Public posts do not show raw source URLs. Official articles are attributed as `Повні деталі — на офіційному сайті.`, where `офіційному сайті` links to the stored `source_url`; every other source uses a `Джерело: <name>` line linked to the original post.
+
+Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the same admin moderation queue as manual submissions, with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When a draft must be split, the parts stay under one metadata/control message. Admins can edit each part before publishing.
+
+### Running a source manually
 
 ```text
 /fetch_news
 ```
 
-The command renders source buttons. For now there is one button: official Marvel Rivals site. After an admin clicks a source, the bot sends a parsing-started status message, then processes one latest unparsed article from that source and reports how many articles were found, how many were already seen, how many were new, how many drafts were created, how many were sent to moderation, and how many failed. Only users listed in `ADMIN_USER_IDS` can run it.
+The command renders one button per **enabled** source, so the menu grows as you switch sources on: `Офіційний сайт` is always there, joined by `Bluesky`, `YouTube`, `Reddit (витоки)`, `RivalSkins (скіни)`, and `Wiki-факти (Чи знали ви?)`. After an admin clicks a source the bot sends a parsing-started status message, processes the single latest unseen item from that source, and reports how many items were found, how many were already seen, how many were new, how many drafts were created, how many were sent to moderation, and how many failed. Only users listed in `ADMIN_USER_IDS` can run it.
 
-Collectors are registered in `services/collectors/registry.py`. The scheduler runs every registered collector when `NEWS_CHECK_INTERVAL_MINUTES` is enabled, so future Reddit or gaming-media collectors can be added to the registry and will be included in scheduled checks automatically. Scheduled runs process unseen articles from the latest stored article publication date in `seen_sources.article_date`, not from the time the bot last parsed the source.
+Two more admin commands trigger the weekly rubrics on demand:
 
-The Gemini wrapper prompt lives in `prompts/gemini_news_uk.md`. The editable official-news style guide lives in `prompts/official_news_style.md`; update that file to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing Python code. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
+```text
+/fanartdigest         build this week's fan-art digest
+/fanartdigest force   rebuild it even if this week was already queued
+/wikifact             queue one "Чи знали ви?" fact
+```
+
+All three commands work in the admin chat or in a DM with the bot, and are listed in the admin chat's command menu. `/wikifact` also reports *why* the rubric is idle when it is — it names the missing precondition (`ENABLE_WIKI_FACTS` or `GEMINI_API_KEY`) instead of failing quietly.
+
+### The periodic check
+
+When `NEWS_CHECK_INTERVAL_MINUTES` is a positive integer and `GEMINI_API_KEY` is set, a background tick runs every enabled source that belongs to the schedule. Scheduled runs process unseen items from the latest stored publication date in `seen_sources.article_date`, not from the time the bot last parsed the source.
+
+Two things deliberately sit outside that tick, because they are weekly and would otherwise post every interval:
+
+- the **wiki-facts rubric**, which runs on `WIKI_FACTS_WEEKDAY` at `WIKI_FACTS_HOUR` — it is still available as a `/fetch_news` button
+- the **fan-art digest**, which runs on `FANART_DIGEST_WEEKDAY` at `FANART_DIGEST_HOUR`
+
+Sources in a tick run one after another rather than in parallel, so each one's duplicate check can see what the previous source just queued. They share one send throttle, so a tick with many new items trickles into the moderation chat instead of flooding it. If one source raises, it is logged and counted as failed while the rest of the tick continues.
+
+### Prompts and text
+
+The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official articles (plus the editable style guide in `prompts/official_news_style.md`), `prompts/gemini_shortform_uk.md` for social and leak posts, and `prompts/gemini_wiki_fact_uk.md` for trivia. A fourth prompt, `prompts/gemini_dedup_uk.md`, backs the cross-source duplicate check rather than any single source. Update the style guide to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing Python code. Feed titles and bodies are passed to Gemini as untrusted data with an explicit instruction not to obey anything embedded in them. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
+
+### The weekly rubrics
+
+The **fan-art digest** pulls the top `FANART_FLAIR` posts of the past week from `FANART_SUBREDDIT` and queues one Telegram album of up to `FANART_DIGEST_COUNT` images. The caption credits each artist by their Reddit nick, hyperlinked to their post — post titles are never shown. Only direct `i.redd.it` still images are included: a media group is atomic, so one image Telegram cannot fetch would fail the whole album. A week that yields no usable image is not marked done, so a later run can still post it.
+
+The **"Чи знали ви?" rubric** lists `Category:Heroes` from the Marvel Rivals Fandom wiki, shuffles the roster, and reads the cleaned bullet points of a hero's Trivia section. One unseen fact per run is translated to Ukrainian by Gemini and credited to `Marvel Rivals Wiki (CC BY-SA)` with a link to the hero page. The scan stops at the first hero with an unseen fact but keeps walking the roster while everything is already posted, so the rubric cannot silently starve. Facts are deduplicated by a hash of the fact text, so re-worded whitespace or casing does not re-post one.
 
 Official AI posts are styled as Telegram gaming-community updates, not article summaries. The prompt asks for a short headline, 1-3 compact blocks, relevant emoji markers, natural Ukrainian, no greetings, no clickbait, no raw Markdown, no public metadata, and no copied patch-note wall. Post-processing sanitizes Markdown artifacts such as `**bold**`, `*` bullets, raw headings, excessive asterisks, duplicated blank lines, misplaced hashtags, raw source URLs, and public `Дата публікації` / `Джерело` lines before moderation. The code detects broad article types from title/body keywords and passes the matching style context to Gemini: shop/skins/bundles, event/rewards/login bonus, patch notes/game update, trailer/teaser/map reveal, vote/community choice, or short announcement. Normal posts target 400-900 characters and are capped at 1200; large patch notes are capped at 1600 and should use 3-5 grouped highlights.
 
@@ -287,19 +434,39 @@ The community navigation footer is always added to every published post — offi
 
 Footer labels and URLs both live in `locales/uk.json` under `post_footer.links` (`chat`, `submission`, `discord`), each with a `label` and a `url`. If a `url` is set, that item is rendered as a safe Telegram HTML link; if a `url` is empty or invalid, the item stays plain text. The bot validates that footer URLs use `http` or `https` before rendering links. Admins can still edit the visible footer text while editing the draft before approval.
 
-Published, moderated, and edited text messages are sent with Telegram link previews disabled. This keeps hidden footer links and any body links from creating large embedded preview cards. Telegram sends use a 30 second request timeout and retry retryable network failures, flood-wait responses, `TimeoutError`, and `aiohttp.ClientOSError` up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
+Published, moderated, and edited text messages are sent with Telegram link previews disabled, which keeps hidden footer links and body links from creating large embedded preview cards. YouTube posts are the one exception: they deliberately enable a large preview of the video URL, so a post whose video could not be downloaded is still playable in place. Telegram sends use a 30 second request timeout and retry retryable network failures, flood-wait responses, `TimeoutError`, and `aiohttp.ClientOSError` up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
 
-Duplicate detection uses the `seen_sources` table. For official Marvel Rivals news, `source_type` is `official_marvel_rivals` and `source_id` is the canonical article URL. An article is marked as seen only after Gemini creates a draft and the moderation preview is sent successfully. If Gemini fails, Telegram moderation sending fails, or the bot crashes before moderation succeeds, the article is not marked as seen and `/fetch_news` can try it again later.
+### Duplicate detection
 
-AI-generated official news tags are deterministic. Every official article gets `#MarvelRivalsUA` and `#Офіційно`, then up to three Ukrainian topic hashtags based on the title/body, such as `#Патч`, `#Фікси`, `#Баланс`, `#Івент`, `#Магазин`, `#Скіни`, `#Герої`, `#Карта`, `#Геймплей`, `#Сезон`, `#ТехнічніРоботи`, `#Рейтинг`, `#Трейлер`, `#Голосування`, `#Анонс`, or `#Кіберспорт`. If nothing specific matches, the fallback is `#MarvelRivalsUA #Офіційно #Анонс`.
+Two independent layers keep the same story from arriving twice.
 
-Media parsing supports `media_type = "photo"` and `media_type = "none"`. The collector prefers Open Graph images, Twitter card images, list/article cover images, and meaningful article images. It filters obvious logos, icons, tracking pixels, avatars, and generic site images. The first safe image remains the primary media. If multiple meaningful images are parsed and the draft has multiple real parts, later parts can receive later media URLs; a normal article still usually creates one media moderation message. If media cannot be parsed safely, the draft is still created as text-only. If sending external media to Telegram moderation fails after retries, the bot logs the error and falls back to a text-only moderation message.
+Per-source deduplication uses the `seen_sources` table, where each source has its own `source_type` and its own natural key: the canonical article URL for the official site, the `at://` post URI for Bluesky, a normalised title scoped to the publish day for YouTube (the channel re-uploads the same trailer under different IDs), the `t3_` post id for Reddit, the feed GUID for RivalSkins, a hash of the fact for wiki trivia, and the ISO week for the fan-art digest. An item is marked seen only after Gemini creates a draft **and** the moderation preview is sent successfully. If Gemini fails, the moderation send fails, or the bot crashes first, the item stays unseen and can be picked up again.
 
-When an approved AI news item has `media_url` and `media_type = "photo"`, the publisher sends the photo URL directly to Telegram with the edited draft as a caption when it fits. If the caption is too long for Telegram, it publishes the image first and then the edited text as one separate message. If the item has multiple saved parts with relevant media on later parts, those parts are published in order using the same caption rules. If Telegram rejects an external media URL itself, the bot logs the error and publishes the text-only fallback. The bot does not download collector media to disk; it stores only Telegram `file_id` values for user-submitted media and external `media_url` values for collected news.
+Cross-source deduplication then catches the same story arriving through two different feeds. Before queueing, Gemini compares the candidate's title against recent titles from *other* sources and drops a duplicate. Two sources opt out of being suppressed: the official site, so its full article is never dropped in favour of a shorter social post, and the trivia rubric, since a fact is not a news story. Both still contribute their titles for other sources to compare against. The check fails open — any error keeps the item.
 
-Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE` with `zoneinfo`. If a source date includes a time but no timezone, the bot does not assume UTC; it keeps date-only metadata instead. Public posts should show visible times only as Kyiv time with `за Києвом` when conversion is reliable. Common `HH:MM UTC/GMT` event schedules from article text are converted to Kyiv time and supplied to Gemini as notes; post-processing also replaces matching raw UTC/GMT times when those notes are available. If conversion is uncertain, the prompt tells Gemini to avoid guessing and omit the time or keep date-only wording.
+### Hashtags
 
-The current collector supports only the official Marvel Rivals news page. Reddit collection is planned as a future source.
+Tags are deterministic, not generated. Official articles get `#MarvelRivalsUA` and `#Офіційно`, followed by up to three Ukrainian topic hashtags matched from the title and body: `#Патч`, `#Фікси`, `#Баланс`, `#Івент`, `#Магазин`, `#Скіни`, `#Герої`, `#Карта`, `#Геймплей`, `#Сезон`, `#ТехнічніРоботи`, `#Рейтинг`, `#Трейлер`, `#Голосування`, `#Кіберспорт`, or `#Анонс` as the fallback. Social and leak sources get the same topic tags without the `#Офіційно` marker. The trivia rubric ignores the topic rules entirely and always uses `#MarvelRivalsUA #ЧиЗналиВи`, since a fact about comics history is not an announcement.
+
+### Media
+
+The official site is photo-only: the parser prefers Open Graph images, Twitter card images, and meaningful article images, filters out logos, icons, tracking pixels, avatars, and generic site art, and keeps at most four. The first safe image is the primary media; if the draft has several real parts, later parts can carry later images. When no image can be parsed safely the draft is still created as text.
+
+The other sources go further:
+
+- **Albums.** A single-part draft with two or more photos — a Bluesky post with several infographics, or the fan-art digest — becomes one Telegram media group. Album images are downloaded and re-uploaded as bytes rather than sent by URL, because Telegram refuses by-URL photos above roughly 5 MB while a bytes upload allows 10 MB. Images are capped at 10 MiB and must be JPEG, PNG, or WebP. A media group is atomic, so if Telegram rejects one item the publisher drops that image and retries with the rest.
+- **Native video.** YouTube videos are downloaded with yt-dlp (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text with a link preview.
+- **Moderation shows the real thing.** Albums and native videos are previewed in the moderation chat exactly as they will be published, so an admin approves what actually goes out. The cost is that a video is downloaded twice — once for the preview, once for publishing.
+
+Album posts, YouTube posts, and downloaded-video posts cannot be edited from moderation — there is no text message to edit — so they are approved or rejected as a whole. Every other post type is editable as usual.
+
+All external media is host-restricted and SSRF-guarded: images may come only from each source's own CDN, downloads are HTTPS-only with redirects disabled, internal and loopback addresses are refused, and bodies are streamed with a hard size cap instead of being buffered. Untrusted XML feeds are parsed with `defusedxml`. If a media send still fails after retries, the bot logs it and falls back to publishing the text.
+
+The bot does not keep collector media on disk. It stores Telegram `file_id` values for user-submitted media and external URLs for collected items; downloads happen in memory at send time.
+
+### Dates and times
+
+Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE` with `zoneinfo`. If a source date includes a time but no timezone, the bot does not assume UTC; it keeps date-only metadata instead. Public posts show visible times only as Kyiv time with `за Києвом` when conversion is reliable. Common `HH:MM UTC/GMT` event schedules from article text are converted to Kyiv time and supplied to Gemini as notes; post-processing also replaces matching raw UTC/GMT times when those notes are available. If conversion is uncertain, the prompt tells Gemini to avoid guessing and omit the time or keep date-only wording.
 
 ## Editing Text And Media
 
@@ -345,7 +512,7 @@ DISCORD_CHAT_CHANNEL_ID=
 DISCORD_LFT_CHANNEL_ID=
 ```
 
-- `ENABLE_DISCORD_MODERATION` — anything other than `true` keeps the Discord bot off.
+- `ENABLE_DISCORD_MODERATION` — `true`/`1`/`yes`/`on` starts the Discord bot, `false`/`0`/`no`/`off` keeps it off. An unrecognized value keeps the default, which is off.
 - `DISCORD_BOT_TOKEN` — bot token from the Discord Developer Portal. Keep it secret; it is read only from the environment and never printed or logged.
 - `DISCORD_MOD_LOG_CHANNEL_ID` — channel where moderation actions, reports, and warning auto-actions are logged (enable Developer Mode, right-click the channel → Copy Channel ID). If it is missing or the bot cannot post there, the bot logs a single safe warning instead.
 - `DISCORD_ALLOWED_INVITES` — optional, comma-separated invite codes or full invite URLs to allow. **Empty means block every Discord invite link.**
@@ -467,7 +634,7 @@ TELEGRAM_LINK_ALLOWLIST=
 TELEGRAM_WELCOME_DELETE_SECONDS=60
 ```
 
-- `ENABLE_TELEGRAM_MODERATION` — anything other than `true` keeps moderation off.
+- `ENABLE_TELEGRAM_MODERATION` — `true`/`1`/`yes`/`on` enables moderation, `false`/`0`/`no`/`off` disables it, and an unrecognized value keeps the default (off). Moderation only actually starts when the flag is on **and** `TELEGRAM_MODERATION_CHAT_IDS` contains at least one chat ID.
 - `TELEGRAM_MODERATION_CHAT_IDS` — comma-separated chat IDs to moderate (supergroup
   IDs look like `-1001234567890`). Only these chats are moderated; everything else
   (the bot's DMs, admin chat, publish channel) is untouched. **Do not list
@@ -561,6 +728,27 @@ Available to **every member** of a moderated chat:
 
 Targets are chosen by replying to a message or by passing a numeric user ID.
 
+### Which commands each chat sees
+
+Telegram stores the command menu server-side per scope, so the bot sets every scope
+explicitly at startup rather than relying on whatever BotFather was once given:
+
+- **Private chats** show only `/start`.
+- **The default and all-group scopes are cleared**, so an unmoderated group inherits
+  no menu at all.
+- **The admin chat** shows `/fetch_news`, `/fanartdigest`, `/wikifact`, and `/cancel`.
+  This is skipped when the admin chat is itself a moderated chat, so admin commands
+  are never advertised to ordinary members.
+- **Each moderated chat** shows `/report` and `/rules` to members, while its
+  administrators get the full moderation list, which overrides the member menu.
+- When moderation is switched off, the menus of the listed chats are deleted so
+  members stop seeing dead `/report` and `/rules` entries.
+
+The menu is only about discoverability — every command still checks permissions when
+it runs, and a command that is not in a menu still works if you type it. If Telegram
+rejects the menu update, the bot retries a few times, then keeps running with the
+previously stored menu.
+
 ### Install and run
 
 aiogram already powers the bot, so no new dependency is needed — run `python main.py`
@@ -572,16 +760,17 @@ bot behaves exactly as before.
 
 - Polling mode only, no webhook setup.
 - No role management inside Telegram. Admin access comes only from `ADMIN_USER_IDS`.
-- Only the official Marvel Rivals news page is supported as an automated source.
-- Official news media support is photo-only; videos are not parsed yet.
+- The official news site is parsed for photos only; video comes from Bluesky and YouTube instead.
+- Every AI feature depends on one Gemini API key. Without it the collectors still fetch and count items but produce no drafts, and the trivia rubric does not run at all.
+- Album, YouTube, and downloaded-video posts cannot be edited from moderation — only approved or rejected.
+- A YouTube or Bluesky video is downloaded twice, once for the moderation preview and once for publishing.
+- Reddit rate-limits hard, so each Reddit-backed feed is fetched at most once per run.
 - User submissions are rate-limited per Telegram user ID using the latest saved submission timestamp.
 - Admin content parts stay in the moderation chat above the metadata/control message.
-- If the moderation chat is a Telegram channel, Telegram does not expose the author of ordinary channel posts to the bot. The bot enforces `ADMIN_USER_IDS` on inline button clicks, then accepts the next supported channel post only for the explicit `➕ Нова частина` flow. Use a private group or supergroup if you need every add-part message to carry the real admin user ID.
+- If the moderation chat is a Telegram channel, Telegram does not expose the author of ordinary channel posts to the bot. The bot enforces `ADMIN_USER_IDS` on inline button clicks, then accepts the next supported channel post only for the explicit `➕ Нова частина` flow. Use a private group or supergroup if you need every add-part message to carry the real admin user ID. `/cancel` also cannot work there, since channel posts carry no user.
 - There is no special command for clearing a text-only part to empty.
 
 ## Planned Future Features
 
-- Reddit parser.
-- Gaming media source parsers.
-- Richer media support for videos when it can be detected safely.
+- More gaming-media source parsers.
 - Webhook deployment mode.
