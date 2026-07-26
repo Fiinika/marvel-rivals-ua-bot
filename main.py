@@ -196,7 +196,7 @@ async def _apply_admin_chat_commands(bot: Bot, config: Config) -> None:
 
     admin_commands = [
         BotCommand(command=name, description=t(f"commands.{name}"))
-        for name in ("fetch_news", "fanartdigest", "wikifact", "cancel")
+        for name in ("fetch_news", "fanartdigest", "wikifact", "cleanup", "cancel")
     ]
     try:
         await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=config.admin_chat_id))

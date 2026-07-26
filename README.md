@@ -407,6 +407,16 @@ Two more admin commands trigger the weekly rubrics on demand:
 /wikifact             queue one "Чи знали ви?" fact
 ```
 
+A fourth command prunes the database:
+
+```text
+/cleanup              report how many finished submissions are older than 30 days
+/cleanup confirm      delete them and reclaim the freed space
+/cleanup 7 confirm    same, with a 7-day window (0 means everything finished)
+```
+
+`/cleanup` deletes only `published` and `rejected` submissions, together with their parts and tag links. Pending submissions are never touched, and neither is `seen_sources` — that table is what stops a source from re-queueing news the channel already handled, so clearing it would flood the moderation chat with old items. Nothing is deleted without `confirm`: on its own the command only reports what would go. Published posts already in the channel are unaffected, since Telegram holds them, not the database. `VACUUM` runs afterwards, because SQLite does not shrink its file on delete.
+
 All three commands work in the admin chat or in a DM with the bot, and are listed in the admin chat's command menu. `/wikifact` also reports *why* the rubric is idle when it is — it names the missing precondition (`ENABLE_WIKI_FACTS` or `GEMINI_API_KEY`) instead of failing quietly.
 
 ### The periodic check
@@ -755,7 +765,7 @@ explicitly at startup rather than relying on whatever BotFather was once given:
 - **Private chats** show only `/start`.
 - **The default and all-group scopes are cleared**, so an unmoderated group inherits
   no menu at all.
-- **The admin chat** shows `/fetch_news`, `/fanartdigest`, `/wikifact`, and `/cancel`.
+- **The admin chat** shows `/fetch_news`, `/fanartdigest`, `/wikifact`, `/cleanup`, and `/cancel`.
   This is skipped when the admin chat is itself a moderated chat, so admin commands
   are never advertised to ordinary members.
 - **Each moderated chat** shows `/report` and `/rules` to members, while its

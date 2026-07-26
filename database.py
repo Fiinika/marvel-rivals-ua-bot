@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -851,6 +851,75 @@ class Database:
             await db.commit()
             return cursor.rowcount if cursor.rowcount is not None else 0
 
+    async def count_processed_submissions(self, *, older_than_days: int) -> int:
+        """How many finished submissions are older than the cutoff.
+
+        Counts only ``published`` and ``rejected`` rows: a pending submission is
+        still waiting for a decision and must never be swept away.
+        """
+        cutoff = _cleanup_cutoff(older_than_days)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM submissions
+                WHERE status IN (?, ?) AND updated_at < ?
+                """,
+                (STATUS_PUBLISHED, STATUS_REJECTED, cutoff),
+            )
+            row = await cursor.fetchone()
+            return int(row["total"]) if row else 0
+
+    async def delete_processed_submissions(self, *, older_than_days: int) -> int:
+        """Delete finished submissions older than the cutoff, with their parts and
+        tag links. Returns how many submissions were removed.
+
+        ``seen_sources`` is deliberately untouched: it is what stops a source from
+        re-queueing news the channel has already handled, so clearing it here
+        would flood the moderation chat with old items.
+        """
+        cutoff = _cleanup_cutoff(older_than_days)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                """
+                SELECT id FROM submissions
+                WHERE status IN (?, ?) AND updated_at < ?
+                """,
+                (STATUS_PUBLISHED, STATUS_REJECTED, cutoff),
+            )
+            ids = [int(row["id"]) for row in await cursor.fetchall()]
+            if not ids:
+                return 0
+
+            placeholders = ",".join("?" for _ in ids)
+            params = tuple(ids)
+            await db.execute(f"DELETE FROM submission_tags WHERE submission_id IN ({placeholders})", params)
+            await db.execute(f"DELETE FROM submission_parts WHERE submission_id IN ({placeholders})", params)
+            await db.execute(f"DELETE FROM submissions WHERE id IN ({placeholders})", params)
+            # Tag rows are shared between submissions, so only drop the ones no
+            # remaining submission points at.
+            await db.execute(
+                """
+                DELETE FROM tags
+                WHERE id NOT IN (SELECT DISTINCT tag_id FROM submission_tags)
+                """
+            )
+            await db.commit()
+            return len(ids)
+
+    async def vacuum(self) -> None:
+        """Reclaim the space freed by a delete — SQLite does not shrink the file
+        on its own, so without this a cleanup frees nothing on disk."""
+        async with self._connect() as db:
+            await db.execute("VACUUM")
+            await db.commit()
+
+    def size_bytes(self) -> int:
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
+
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
         async with aiosqlite.connect(self.path) as connection:
@@ -1000,6 +1069,15 @@ class Database:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _cleanup_cutoff(older_than_days: int) -> str:
+    """Timestamps older than this are eligible for cleanup.
+
+    ``0`` means "everything already processed", so the cutoff is now.
+    """
+    days = max(0, older_than_days)
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 def _normalize_tag_names(tag_names: list[str]) -> list[str]:

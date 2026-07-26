@@ -245,6 +245,84 @@ async def wiki_fact_command(message: Message, bot: Bot, config: Config, db: Data
     await message.answer(t("admin.wiki_fact.queued") if created else t("admin.wiki_fact.skipped"))
 
 
+_CLEANUP_DEFAULT_DAYS = 30
+
+
+@router.message(AdminOrPrivateChatFilter(), Command("cleanup"))
+async def cleanup_command(
+    message: Message, command: CommandObject, bot: Bot, config: Config, db: Database
+) -> None:
+    """Delete finished submissions from the database.
+
+    Two-step by design: without `confirm` it only reports what WOULD go, because
+    this is the one admin command that destroys data. Pending submissions and the
+    seen-sources memory are never touched — dropping the latter would re-queue
+    news the channel already handled.
+    """
+    if message.from_user is None or message.from_user.id not in config.admin_user_ids:
+        await message.answer(t("admin.cleanup.no_permission"))
+        return
+
+    if message.chat.id != config.admin_chat_id and _chat_type(message) != "private":
+        await message.answer(t("admin.cleanup.wrong_chat"))
+        return
+
+    days, confirmed, invalid = _parse_cleanup_args(command.args)
+    if invalid is not None:
+        await message.answer(t("admin.cleanup.bad_argument", value=invalid))
+        return
+
+    try:
+        total = await db.count_processed_submissions(older_than_days=days)
+    except Exception:
+        logger.exception("Cleanup count failed")
+        await message.answer(t("admin.cleanup.failed"))
+        return
+
+    if not total:
+        await message.answer(t("admin.cleanup.nothing", days=days))
+        return
+
+    if not confirmed:
+        await message.answer(t("admin.cleanup.preview", count=total, days=days))
+        return
+
+    size_before = db.size_bytes()
+    try:
+        deleted = await db.delete_processed_submissions(older_than_days=days)
+        await db.vacuum()
+    except Exception:
+        logger.exception("Cleanup failed")
+        await message.answer(t("admin.cleanup.failed"))
+        return
+
+    freed = max(0, size_before - db.size_bytes())
+    logger.info("Cleanup removed %s submissions older than %s days", deleted, days)
+    await message.answer(
+        t("admin.cleanup.done", count=deleted, days=days, freed=_format_kilobytes(freed))
+    )
+
+
+def _parse_cleanup_args(args: str | None) -> tuple[int, bool, str | None]:
+    """Return (days, confirmed, invalid token). Accepts any order: "confirm",
+    "7", "7 confirm", "confirm 7"."""
+    days = _CLEANUP_DEFAULT_DAYS
+    confirmed = False
+    for token in (args or "").split():
+        lowered = token.casefold()
+        if lowered == "confirm":
+            confirmed = True
+        elif lowered.isdigit():
+            days = int(lowered)
+        else:
+            return days, confirmed, token
+    return days, confirmed, None
+
+
+def _format_kilobytes(size_bytes: int) -> str:
+    return f"{size_bytes / 1024:.0f} КБ"
+
+
 @router.callback_query(CollectorCallback.filter())
 async def collector_callback(
     callback: CallbackQuery,

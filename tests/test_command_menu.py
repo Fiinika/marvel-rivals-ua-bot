@@ -36,12 +36,19 @@ def test_admin_commands_are_scoped_to_the_admin_chat() -> None:
     commands, scope = bot.calls[0]
     assert isinstance(scope, BotCommandScopeChat)
     assert scope.chat_id == -4242
-    assert [c.command for c in commands] == ["fetch_news", "fanartdigest", "wikifact", "cancel"]
+    assert [c.command for c in commands] == [
+        "fetch_news",
+        "fanartdigest",
+        "wikifact",
+        "cleanup",
+        "cancel",
+    ]
     # Descriptions come from the locale, not a placeholder key.
     assert [c.description for c in commands] == [
         t("commands.fetch_news"),
         t("commands.fanartdigest"),
         t("commands.wikifact"),
+        t("commands.cleanup"),
         t("commands.cancel"),
     ]
     assert all(c.description and not c.description.startswith("commands.") for c in commands)
