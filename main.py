@@ -215,9 +215,14 @@ def _start_news_scheduler_if_enabled(bot: Bot, config: Config, db: Database) -> 
         logger.info("NEWS_CHECK_INTERVAL_MINUTES is empty or invalid. News collector scheduler is disabled.")
         return None
 
+    # The model is named here because it is the one setting with no other visible
+    # trace: a GEMINI_MODEL secret silently overrides the code default, and the
+    # deploy script keeps an old value when the secret is removed, so the log is
+    # the only way to tell which model is actually generating drafts.
     logger.info(
-        "News collector scheduler enabled: every %s minutes",
+        "News collector scheduler enabled: every %s minutes, drafting with %s",
         config.news_check_interval_minutes,
+        config.gemini_model,
     )
     return asyncio.create_task(_news_scheduler(bot, config, db), name="news-collector-scheduler")
 

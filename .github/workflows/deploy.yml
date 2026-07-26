@@ -43,6 +43,12 @@
 # you do not set are left untouched, so you may instead manage .env.prod by
 # hand on the box and set only the SSH secrets here.
 #
+# NOTE: because an empty value is skipped, DELETING a secret does NOT remove the
+# key from .env.prod — the server keeps the last value it was given, and the
+# app's own default never takes over. To go back to a code default, edit
+# .env.prod on the box; to change a value, set the secret and re-run this
+# workflow (secrets are only read at deploy time).
+#
 # --- One-time server setup -------------------------------------------------
 #   1. Install Docker Engine + the compose plugin.
 #   2. The deploy dir, .env.prod, and docker-compose.prod.yml are created and
