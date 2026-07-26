@@ -10,6 +10,11 @@ class ConfigError(ValueError):
     """Raised when required environment configuration is missing or invalid."""
 
 
+# Compared against gemini-2.5-flash and gemini-3.5-flash on real articles, social
+# posts and wiki trivia: 3.6 produced the most natural Ukrainian (2.5 translated the
+# game's name, rendering "Rivals" as "суперники"), fit noticeably more of a patch
+# note into the same character budget, and was the fastest of the three.
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_YOUTUBE_CHANNEL_ID = "UCWzmOSSiSPbVnVu3ZAyDx2w"  # official @MarvelRivals
 # Title keywords (lowercased) that mark a YouTube upload as noise to skip. Scoped
 # narrowly to genuine ESPORTS-VOD coverage — NOT "tournament"/"vs"/Shorts, because
@@ -67,7 +72,7 @@ class Config:
     min_submission_text_words: int = 3
     min_submission_text_chars: int = 10
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = DEFAULT_GEMINI_MODEL
     official_news_url: str = "https://www.marvelrivals.com/news/"
     news_check_interval_minutes: int | None = 30
     article_timezone: str = "Europe/Kyiv"
@@ -181,7 +186,7 @@ def load_config() -> Config:
     min_submission_text_words = _optional_non_negative_int("MIN_SUBMISSION_TEXT_WORDS", 3)
     min_submission_text_chars = _optional_non_negative_int("MIN_SUBMISSION_TEXT_CHARS", 10)
     gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip() or None
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
     official_news_url = os.getenv("OFFICIAL_NEWS_URL", "https://www.marvelrivals.com/news/").strip()
     official_news_url = official_news_url or "https://www.marvelrivals.com/news/"
     news_check_interval_minutes = _optional_positive_int_or_none("NEWS_CHECK_INTERVAL_MINUTES", 30)
