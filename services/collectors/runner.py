@@ -34,6 +34,7 @@ from services.date_utils import build_utc_time_conversion_notes
 from services.gemini import GeminiDraftGenerator, GeminiDraftInput
 from services.i18n import t
 from services.moderation import send_submission_to_moderation
+from services.source_links import collect_publishable_links
 
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,14 @@ class BaseNewsCollector(ABC):
                 article_date=candidate.article_date,
                 target_timezone=self.config.article_timezone,
             )
+            # Taken from the original post, not from the draft: URL stripping
+            # removes every link the model writes, and a model-written URL should
+            # never be published anyway.
+            extra_links = await collect_publishable_links(
+                candidate.body_text,
+                source_type=self.definition.source_type,
+                article_url=source_url,
+            )
             draft_package = await generator.generate_draft_package(
                 GeminiDraftInput(
                     title=candidate.title,
@@ -272,6 +281,7 @@ class BaseNewsCollector(ABC):
                     body_text=candidate.body_text,
                     source_type=self.definition.source_type,
                     source_name=candidate.source_name,
+                    extra_links=tuple(extra_links),
                 ),
                 max_part_length=max_part_length,
             )

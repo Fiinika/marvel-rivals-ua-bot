@@ -377,6 +377,18 @@ The official news collector reads `OFFICIAL_NEWS_URL`, extracts recent article c
 
 The generated public draft includes only publishable post content and hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata. Public posts do not show raw source URLs. Official articles are attributed as `Повні деталі — на офіційному сайті.`, where `офіційному сайті` links to the stored `source_url`; every other source uses a `Джерело: <name>` line linked to the original post.
 
+### Links inside a post
+
+Every URL is stripped out of a generated draft, because a URL a model wrote is not one worth publishing. That also used to discard the links a post existed to share — a playlist, an event page, a stream.
+
+Those are now re-attached from the **original** post text, never from the draft, and only when all three of these hold:
+
+- the source is trusted enough to carry links — currently Bluesky only. The official site is already reachable through its attribution link, YouTube descriptions are mostly boilerplate, and Reddit and RivalSkins are user-submitted leak content, which is where an unvetted link is likeliest to be hostile.
+- the destination is on a small allowlist of official and known platforms (marvelrivals.com, YouTube, Twitch, Spotify, Discord, Steam).
+- a link shortener is resolved one hop first, so a hidden destination is judged on where it actually goes. The bot reads the redirect header only and never fetches the linked page. An `http` destination on an allowlisted host is upgraded to `https` rather than dropped, since shorteners commonly hand one back.
+
+At most two links survive per post, appended as `🔗 <platform>: <url>` lines. Telegram makes them clickable on its own, and previews stay disabled, so no preview card appears. Anything that fails a gate is dropped exactly as before.
+
 Nothing is auto-published. Each generated item is inserted into `submissions` with `status = "pending"` and sent to the same admin moderation queue as manual submissions, with the same `✅ Approve`, `✏️ Edit`, and `❌ Reject` buttons. When a draft must be split, the parts stay under one metadata/control message. Admins can edit each part before publishing.
 
 ### Running a source manually

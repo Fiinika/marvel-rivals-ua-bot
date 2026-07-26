@@ -102,6 +102,10 @@ class GeminiDraftInput:
     body_text: str
     source_type: str
     source_name: str
+    # (label, url) pairs lifted from the ORIGINAL post and already validated by
+    # services.source_links. They are appended after the draft rather than fed to
+    # the model, so a published link is never one the model wrote.
+    extra_links: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -349,6 +353,7 @@ def _ensure_required_metadata(draft: str, draft_input: GeminiDraftInput) -> str:
     # as noise. The article date stays available to admins via the original_text.
     result = _clean_model_draft(draft, draft_input).strip()
     result = _apply_datetime_notes(result, draft_input.datetime_notes)
+    result = _append_extra_links(result, draft_input)
 
     source_line = _source_attribution_line(draft_input)
     if source_line and not _has_source_attribution(result):
@@ -359,6 +364,24 @@ def _ensure_required_metadata(draft: str, draft_input: GeminiDraftInput) -> str:
         result = f"{result}\n\n{hashtags}"
 
     return _normalize_blank_lines(result)
+
+
+def _append_extra_links(text: str, draft_input: GeminiDraftInput) -> str:
+    """Re-attach the post's own validated links, which URL stripping removed.
+
+    They are added AFTER cleaning, so the strip cannot take them out again, and
+    they are rendered as bare URLs: Telegram makes those clickable on its own,
+    and the collector paths that carry links publish with previews disabled, so
+    no preview card appears.
+    """
+    if not draft_input.extra_links:
+        return text
+
+    lines = [f"🔗 {label}: {url}" for label, url in draft_input.extra_links if url not in text]
+    if not lines:
+        return text
+
+    return f"{text}\n\n" + "\n".join(lines) if text else "\n".join(lines)
 
 
 def _clean_model_draft(draft: str, draft_input: GeminiDraftInput) -> str:
