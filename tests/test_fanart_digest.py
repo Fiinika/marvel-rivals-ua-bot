@@ -18,6 +18,7 @@ from services.digests.fanart import (
     next_weekly_run_at,
     run_fanart_digest_once,
 )
+from services.i18n import t
 from services.publisher import album_image_urls
 
 
@@ -184,6 +185,55 @@ def test_run_once_force_bypasses_week_guard(monkeypatch) -> None:
     assert created is True
     assert sent == [42]
     assert db.created is not None
+
+
+class _FakeMessage:
+    def __init__(self, *, user_id: int = 7, chat_id: int = 100, chat_type: str = "private") -> None:
+        self.from_user = SimpleNamespace(id=user_id, username="admin")
+        self.chat = SimpleNamespace(id=chat_id, type=chat_type)
+        self.answers: list[str] = []
+
+    async def answer(self, text: str) -> None:
+        self.answers.append(text)
+
+
+def _command_config(*, enabled: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        enable_fanart_digest=enabled,
+        admin_user_ids=frozenset({7}),
+        admin_chat_id=100,
+    )
+
+
+def _run_command(monkeypatch, message, config, created: bool) -> None:
+    import handlers.admin as admin
+
+    async def fake_run(bot, cfg, db, *, force=False):
+        return created
+
+    monkeypatch.setattr(admin, "run_fanart_digest_once", fake_run)
+    asyncio.run(
+        admin.fanart_digest_command(
+            message, command=SimpleNamespace(args=None), bot=None, config=config, db=None
+        )
+    )
+
+
+def test_command_warns_when_the_weekly_scheduler_is_off(monkeypatch) -> None:
+    # The digest is still built — an admin who typed the command wants it — but a
+    # disabled scheduler means nothing will appear on Friday, so say so.
+    message = _FakeMessage()
+    _run_command(monkeypatch, message, _command_config(enabled=False), True)
+
+    assert "ENABLE_FANART_DIGEST" in message.answers[0]
+    assert message.answers[-1] == t("admin.fanart_digest.queued")
+
+
+def test_command_stays_quiet_when_the_scheduler_is_on(monkeypatch) -> None:
+    message = _FakeMessage()
+    _run_command(monkeypatch, message, _command_config(enabled=True), True)
+
+    assert message.answers == [t("admin.fanart_digest.started"), t("admin.fanart_digest.queued")]
 
 
 def test_run_once_skips_non_direct_image_posts(monkeypatch) -> None:

@@ -8,6 +8,7 @@ from services.gemini import (
     GeminiDraftInput,
     _build_prompt,
     _ensure_required_metadata,
+    _fallback_tags,
     _public_hashtag_line,
     _select_prompt_template,
     _source_attribution_line,
@@ -60,6 +61,62 @@ def test_non_official_gets_topic_tags() -> None:
     assert "#Трейлер" in line
     assert "#MarvelRivalsUA" in line
     assert "#Офіційно" not in line
+
+
+def _leak(title: str, body: str, source_type: str = "reddit") -> GeminiDraftInput:
+    return GeminiDraftInput(
+        title=title,
+        article_url="https://reddit.com/x",
+        article_date_display=None,
+        datetime_notes=None,
+        body_text=body,
+        source_type=source_type,
+        source_name="Reddit (витоки Marvel Rivals)",
+    )
+
+
+def test_leak_always_carries_the_rumour_tag() -> None:
+    # Even when a topic tag matches, the marker stays — a label that shows up at
+    # random is one readers cannot rely on.
+    line = _public_hashtag_line(_leak("New skin leaked", "a datamined costume for Psylocke"))
+
+    assert "#Чутки" in line
+    assert "#Скіни" in line
+    assert "#Офіційно" not in line
+
+
+def test_leak_without_a_topic_match_is_not_called_an_announcement() -> None:
+    line = _public_hashtag_line(_leak("Something odd in the files", "an unnamed asset showed up"))
+
+    assert "#Чутки" in line
+    assert "#Анонс" not in line
+
+
+def test_rivalskins_is_tagged_as_a_rumour_too() -> None:
+    assert "#Чутки" in _public_hashtag_line(_leak("Skin render", "upcoming render", source_type="rivalskins"))
+
+
+def test_rumour_stored_tags_match_the_public_marker() -> None:
+    tags = _fallback_tags(_leak("New skin leaked", "a datamined costume"))
+
+    assert "чутки" in tags
+    assert "marvelrivalsua" in tags
+
+
+def test_non_rumour_sources_keep_the_announcement_fallback() -> None:
+    # Bluesky/YouTube really do carry announcements, so their default is untouched.
+    line = _public_hashtag_line(_draft("bluesky"))
+
+    assert "#Анонс" in line
+    assert "#Чутки" not in line
+    assert "чутки" not in _fallback_tags(_draft("bluesky"))
+
+
+def test_official_hashtags_are_unchanged_by_the_rumour_branch() -> None:
+    line = _public_hashtag_line(_draft("official_marvel_rivals"))
+
+    assert line.startswith("#MarvelRivalsUA #Офіційно")
+    assert "#Чутки" not in line
 
 
 def test_allow_source_link_predicate() -> None:

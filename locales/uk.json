@@ -49,7 +49,8 @@
       "started": "🎨 Збираю дайджест фан-арту тижня…",
       "queued": "✅ Дайджест фан-арту відправлено на модерацію.",
       "skipped": "Дайджест не створено — або вже зроблено цього тижня, або немає прямих зображень. Додай «force» (/fanartdigest force), щоб створити попри тижневу позначку.",
-      "failed": "Не вдалося зібрати дайджест. Деталі — у логах."
+      "failed": "Не вдалося зібрати дайджест. Деталі — у логах.",
+      "scheduler_disabled": "ℹ️ Щотижневий дайджест вимкнений (ENABLE_FANART_DIGEST) — цей запуск ручний, автоматично в п'ятницю він не вийде."
     },
     "wiki_fact": {
       "no_permission": "У тебе немає прав для цієї команди.",
@@ -69,7 +70,7 @@
   "collector_report": {
     "completed": "Перевірку джерела «{source}» завершено.",
     "all_completed": "Перевірку всіх джерел завершено.",
-    "found": "Знайдено статей: {count}",
+    "found": "Знайдено матеріалів: {count}",
     "duplicates": "Дублікати: {count}",
     "new": "Нові: {count}",
     "drafts_created": "Чернеток створено: {count}",
@@ -152,6 +153,8 @@
     "source_marker": "Джерело",
     "source_line": "Джерело: {source_name}",
     "hashtags": "#MarvelRivalsUA",
+    "rumor_hashtag": "#Чутки",
+    "rumor_tag": "чутки",
     "part_title": "Частина {number}",
     "fallback_tag": "marvelrivalsua"
   },

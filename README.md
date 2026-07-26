@@ -446,7 +446,12 @@ Cross-source deduplication then catches the same story arriving through two diff
 
 ### Hashtags
 
-Tags are deterministic, not generated. Official articles get `#MarvelRivalsUA` and `#Офіційно`, followed by up to three Ukrainian topic hashtags matched from the title and body: `#Патч`, `#Фікси`, `#Баланс`, `#Івент`, `#Магазин`, `#Скіни`, `#Герої`, `#Карта`, `#Геймплей`, `#Сезон`, `#ТехнічніРоботи`, `#Рейтинг`, `#Трейлер`, `#Голосування`, `#Кіберспорт`, or `#Анонс` as the fallback. Social and leak sources get the same topic tags without the `#Офіційно` marker. The trivia rubric ignores the topic rules entirely and always uses `#MarvelRivalsUA #ЧиЗналиВи`, since a fact about comics history is not an announcement.
+Tags are deterministic, not generated. Official articles get `#MarvelRivalsUA` and `#Офіційно`, followed by up to three Ukrainian topic hashtags matched from the title and body: `#Патч`, `#Фікси`, `#Баланс`, `#Івент`, `#Магазин`, `#Скіни`, `#Герої`, `#Карта`, `#Геймплей`, `#Сезон`, `#ТехнічніРоботи`, `#Рейтинг`, `#Трейлер`, `#Голосування`, `#Кіберспорт`, or `#Анонс` as the fallback. Social sources get the same topic tags without the `#Офіційно` marker.
+
+Two kinds of post opt out of that scheme, because the topic rules would mislabel them:
+
+- **Leaks** (Reddit, RivalSkins) always carry `#Чутки` and never fall back to `#Анонс` — a datamine is not an announcement. The marker is added to every leak rather than only when no topic matched, so it is something readers can rely on and use as a filter.
+- **Trivia** always uses `#MarvelRivalsUA #ЧиЗналиВи` and ignores the topic rules entirely, since a fact about comics history is neither news nor an announcement.
 
 ### Media
 

@@ -424,6 +424,9 @@ def _fallback_tags(draft_input: GeminiDraftInput) -> list[str]:
         return [fallback_tag, t("collectors.wiki_facts.tag")]
 
     tags = [fallback_tag]
+    if _is_rumor_source(draft_input):
+        # Keep the stored tags in step with the permanent public "#Чутки" marker.
+        tags.append(t("gemini.rumor_tag"))
     lowered = f"{draft_input.title}\n{draft_input.body_text}".lower()
     keyword_tags = {
         "patch": "патч",
@@ -487,6 +490,16 @@ def _public_hashtag_line(draft_input: GeminiDraftInput) -> str:
     if _is_wiki_fact_source(draft_input):
         return t("collectors.wiki_facts.hashtags")
 
+    # A leak is never an announcement, so rumour sources carry a permanent
+    # "#Чутки" marker instead of the "#Анонс" default. It is added on EVERY such
+    # post, not only when no topic matched: a marker that appears at random is
+    # one readers cannot rely on, and as a constant it doubles as a channel-wide
+    # filter separating rumours from official news.
+    if _is_rumor_source(draft_input):
+        return " ".join(
+            [t("gemini.hashtags"), t("gemini.rumor_hashtag"), *_topic_hashtags(draft_input, fallback=False)]
+        )
+
     # Non-official (social/short-form) posts get the base tag PLUS the same topic
     # tags, just without the #Офіційно marker, so they are tagged too — not bare.
     return " ".join([t("gemini.hashtags"), *_topic_hashtags(draft_input)])
@@ -496,7 +509,13 @@ def _official_database_tags(draft_input: GeminiDraftInput) -> list[str]:
     return [tag.lstrip("#") for tag in _official_hashtags(draft_input)]
 
 
-def _topic_hashtags(draft_input: GeminiDraftInput) -> list[str]:
+def _topic_hashtags(draft_input: GeminiDraftInput, *, fallback: bool = True) -> list[str]:
+    """Up to three topic tags matched from the title/body.
+
+    ``fallback`` adds "#Анонс" when nothing matched. Callers that already supply
+    their own marker (rumour sources) turn it off, so a leak is never labelled an
+    announcement just because no keyword hit.
+    """
     text = f"{draft_input.title}\n{draft_input.body_text}".lower()
     topic_tags: list[str] = []
     for keywords, hashtag in OFFICIAL_TOPIC_TAG_RULES:
@@ -507,7 +526,7 @@ def _topic_hashtags(draft_input: GeminiDraftInput) -> list[str]:
         if len(topic_tags) >= 3:
             break
 
-    if not topic_tags:
+    if not topic_tags and fallback:
         topic_tags.append("#Анонс")
 
     return topic_tags[:3]

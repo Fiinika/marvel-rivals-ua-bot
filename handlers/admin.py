@@ -181,7 +181,12 @@ async def fanart_digest_command(
     message: Message, command: CommandObject, bot: Bot, config: Config, db: Database
 ) -> None:
     """Manually build this week's fan-art digest into the moderation queue. Pass
-    `force` to bypass the once-a-week guard (useful for testing)."""
+    `force` to bypass the once-a-week guard (useful for testing).
+
+    Unlike /wikifact this runs even when the feature flag is off — an admin who
+    typed the command wants the digest — but it says so, since ENABLE_FANART_DIGEST
+    being off means no digest will appear on its own.
+    """
     if message.from_user is None or message.from_user.id not in config.admin_user_ids:
         await message.answer(t("admin.fanart_digest.no_permission"))
         return
@@ -191,6 +196,8 @@ async def fanart_digest_command(
         return
 
     force = (command.args or "").strip().casefold() == "force"
+    if not config.enable_fanart_digest:
+        await message.answer(t("admin.fanart_digest.scheduler_disabled"))
     await message.answer(t("admin.fanart_digest.started"))
     try:
         created = await run_fanart_digest_once(bot, config, db, force=force)
