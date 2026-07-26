@@ -413,9 +413,14 @@ A fourth command prunes the database:
 /cleanup              report how many finished submissions are older than 30 days
 /cleanup confirm      delete them and reclaim the freed space
 /cleanup 7 confirm    same, with a 7-day window (0 means everything finished)
+/cleanup all confirm  wipe every submission, pending ones included, at any age
 ```
 
-`/cleanup` deletes only `published` and `rejected` submissions, together with their parts and tag links. Pending submissions are never touched, and neither is `seen_sources` — that table is what stops a source from re-queueing news the channel already handled, so clearing it would flood the moderation chat with old items. Nothing is deleted without `confirm`: on its own the command only reports what would go. Published posts already in the channel are unaffected, since Telegram holds them, not the database. `VACUUM` runs afterwards, because SQLite does not shrink its file on delete.
+By default `/cleanup` deletes only `published` and `rejected` submissions, together with their parts and tag links — a pending submission is still waiting for a decision. Add `all` to include pending ones too, which is how you clear a queue of abandoned drafts; it drops the age window to 0 unless you also pass a number. Their moderation messages stay in the chat but their buttons then report that the submission no longer exists, so delete those messages by hand.
+
+`seen_sources` is never touched, in either mode. That table is what stops a source from re-queueing news the channel already handled, so clearing it would flood the moderation chat with old items. Published posts already in the channel are unaffected too, since Telegram holds them, not the database.
+
+Nothing is deleted without `confirm`: on its own the command reports what would go, and when nothing matches it lists what the database actually holds by status — otherwise "nothing to clean" is baffling when the moderation chat is visibly full of pending drafts. `VACUUM` runs after a deletion, because SQLite does not shrink its file on its own.
 
 All three commands work in the admin chat or in a DM with the bot, and are listed in the admin chat's command menu. `/wikifact` also reports *why* the rubric is idle when it is — it names the missing precondition (`ENABLE_WIKI_FACTS` or `GEMINI_API_KEY`) instead of failing quietly.
 

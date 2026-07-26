@@ -851,27 +851,36 @@ class Database:
             await db.commit()
             return cursor.rowcount if cursor.rowcount is not None else 0
 
-    async def count_processed_submissions(self, *, older_than_days: int) -> int:
-        """How many finished submissions are older than the cutoff.
+    async def count_submissions_by_status(self) -> dict[str, int]:
+        """Every submission in the database, grouped by status."""
+        async with self._connect() as db:
+            cursor = await db.execute("SELECT status, COUNT(*) AS total FROM submissions GROUP BY status")
+            return {str(row["status"]): int(row["total"]) for row in await cursor.fetchall()}
 
-        Counts only ``published`` and ``rejected`` rows: a pending submission is
-        still waiting for a decision and must never be swept away.
+    async def count_processed_submissions(self, *, older_than_days: int, include_pending: bool = False) -> int:
+        """How many submissions are older than the cutoff and eligible for cleanup.
+
+        By default only ``published`` and ``rejected`` rows count: a pending
+        submission is still waiting for a decision. ``include_pending`` widens it
+        to every status, for wiping a queue of abandoned drafts.
         """
         cutoff = _cleanup_cutoff(older_than_days)
+        statuses = _cleanup_statuses(include_pending)
+        placeholders = ",".join("?" for _ in statuses)
         async with self._connect() as db:
             cursor = await db.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS total
                 FROM submissions
-                WHERE status IN (?, ?) AND updated_at < ?
+                WHERE status IN ({placeholders}) AND updated_at < ?
                 """,
-                (STATUS_PUBLISHED, STATUS_REJECTED, cutoff),
+                (*statuses, cutoff),
             )
             row = await cursor.fetchone()
             return int(row["total"]) if row else 0
 
-    async def delete_processed_submissions(self, *, older_than_days: int) -> int:
-        """Delete finished submissions older than the cutoff, with their parts and
+    async def delete_processed_submissions(self, *, older_than_days: int, include_pending: bool = False) -> int:
+        """Delete eligible submissions older than the cutoff, with their parts and
         tag links. Returns how many submissions were removed.
 
         ``seen_sources`` is deliberately untouched: it is what stops a source from
@@ -879,13 +888,15 @@ class Database:
         would flood the moderation chat with old items.
         """
         cutoff = _cleanup_cutoff(older_than_days)
+        statuses = _cleanup_statuses(include_pending)
+        status_placeholders = ",".join("?" for _ in statuses)
         async with self._connect() as db:
             cursor = await db.execute(
-                """
+                f"""
                 SELECT id FROM submissions
-                WHERE status IN (?, ?) AND updated_at < ?
+                WHERE status IN ({status_placeholders}) AND updated_at < ?
                 """,
-                (STATUS_PUBLISHED, STATUS_REJECTED, cutoff),
+                (*statuses, cutoff),
             )
             ids = [int(row["id"]) for row in await cursor.fetchall()]
             if not ids:
@@ -1069,6 +1080,12 @@ class Database:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _cleanup_statuses(include_pending: bool) -> tuple[str, ...]:
+    if include_pending:
+        return (STATUS_PUBLISHED, STATUS_REJECTED, STATUS_PENDING)
+    return (STATUS_PUBLISHED, STATUS_REJECTED)
 
 
 def _cleanup_cutoff(older_than_days: int) -> str:

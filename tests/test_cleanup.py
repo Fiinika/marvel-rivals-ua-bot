@@ -124,6 +124,27 @@ def test_delete_is_a_no_op_when_nothing_matches(tmp_path) -> None:
     assert asyncio.run(db.delete_processed_submissions(older_than_days=1000)) == 0
 
 
+def test_include_pending_wipes_every_status(tmp_path) -> None:
+    db = asyncio.run(_seed(tmp_path / "bot.db"))
+
+    deleted = asyncio.run(db.delete_processed_submissions(older_than_days=0, include_pending=True))
+
+    assert deleted == 4  # 2 published + 1 rejected + 1 pending
+    assert asyncio.run(db.count_submissions_by_status()) == {}
+    # Even a full wipe keeps the dedup memory, so old news does not come back.
+    assert asyncio.run(db.is_source_seen("bluesky", "at://x")) is True
+
+
+def test_status_breakdown_counts_every_state(tmp_path) -> None:
+    db = asyncio.run(_seed(tmp_path / "bot.db"))
+
+    assert asyncio.run(db.count_submissions_by_status()) == {
+        "published": 2,
+        "rejected": 1,
+        "pending": 1,
+    }
+
+
 # --- the command ---------------------------------------------------------------
 
 
@@ -138,16 +159,20 @@ class _FakeMessage:
 
 
 class _FakeDB:
-    def __init__(self, total: int = 5) -> None:
+    def __init__(self, total: int = 5, breakdown: dict[str, int] | None = None) -> None:
         self.total = total
-        self.deleted_with: list[int] = []
+        self.breakdown = breakdown or {"pending": 3}
+        self.deleted_with: list[tuple[int, bool]] = []
         self.vacuumed = False
 
-    async def count_processed_submissions(self, *, older_than_days: int) -> int:
+    async def count_processed_submissions(self, *, older_than_days: int, include_pending: bool = False) -> int:
         return self.total
 
-    async def delete_processed_submissions(self, *, older_than_days: int) -> int:
-        self.deleted_with.append(older_than_days)
+    async def count_submissions_by_status(self) -> dict[str, int]:
+        return self.breakdown
+
+    async def delete_processed_submissions(self, *, older_than_days: int, include_pending: bool = False) -> int:
+        self.deleted_with.append((older_than_days, include_pending))
         return self.total
 
     async def vacuum(self) -> None:
@@ -181,7 +206,7 @@ def test_confirm_deletes_and_vacuums() -> None:
     message, db = _FakeMessage(), _FakeDB(total=5)
     _run(message, db, "confirm")
 
-    assert db.deleted_with == [30]  # the default window
+    assert db.deleted_with == [(30, False)]  # default window, finished rows only
     assert db.vacuumed is True
 
 
@@ -189,14 +214,37 @@ def test_a_custom_window_is_honoured() -> None:
     message, db = _FakeMessage(), _FakeDB(total=2)
     _run(message, db, "7 confirm")
 
-    assert db.deleted_with == [7]
+    assert db.deleted_with == [(7, False)]
 
 
 def test_arguments_may_come_in_any_order() -> None:
     message, db = _FakeMessage(), _FakeDB(total=2)
     _run(message, db, "confirm 7")
 
-    assert db.deleted_with == [7]
+    assert db.deleted_with == [(7, False)]
+
+
+def test_all_includes_pending_and_drops_the_age_window() -> None:
+    # "/cleanup all" is the wipe-the-queue case: every status, any age.
+    message, db = _FakeMessage(), _FakeDB(total=9)
+    _run(message, db, "all confirm")
+
+    assert db.deleted_with == [(0, True)]
+
+
+def test_all_can_still_be_combined_with_an_age_window() -> None:
+    message, db = _FakeMessage(), _FakeDB(total=4)
+    _run(message, db, "all 7 confirm")
+
+    assert db.deleted_with == [(7, True)]
+
+
+def test_all_without_confirm_warns_about_pending() -> None:
+    message, db = _FakeMessage(), _FakeDB(total=9)
+    _run(message, db, "all")
+
+    assert db.deleted_with == []
+    assert message.answers[0] == t("admin.cleanup.preview_all", count=9, days=0)
 
 
 def test_an_unknown_argument_is_rejected_without_deleting() -> None:
@@ -207,12 +255,16 @@ def test_an_unknown_argument_is_rejected_without_deleting() -> None:
     assert "wipe-everything" in message.answers[0]
 
 
-def test_nothing_to_clean_reports_and_stops() -> None:
-    message, db = _FakeMessage(), _FakeDB(total=0)
+def test_nothing_to_clean_shows_what_is_actually_in_the_database() -> None:
+    # The confusing case from real use: the moderation chat is full, but every
+    # draft is still pending, so the default filter matches none of them.
+    message, db = _FakeMessage(), _FakeDB(total=0, breakdown={"pending": 12})
     _run(message, db, "confirm")
 
     assert db.deleted_with == []
-    assert message.answers == [t("admin.cleanup.nothing", days=30)]
+    answer = message.answers[0]
+    assert "12" in answer  # the pending count is spelled out
+    assert "/cleanup all" in answer  # and the way to remove them is offered
 
 
 def test_non_admins_are_refused() -> None:

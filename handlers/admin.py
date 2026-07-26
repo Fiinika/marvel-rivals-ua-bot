@@ -267,29 +267,37 @@ async def cleanup_command(
         await message.answer(t("admin.cleanup.wrong_chat"))
         return
 
-    days, confirmed, invalid = _parse_cleanup_args(command.args)
+    days, confirmed, include_pending, invalid = _parse_cleanup_args(command.args)
     if invalid is not None:
         await message.answer(t("admin.cleanup.bad_argument", value=invalid))
         return
 
     try:
-        total = await db.count_processed_submissions(older_than_days=days)
+        total = await db.count_processed_submissions(older_than_days=days, include_pending=include_pending)
+        breakdown = await db.count_submissions_by_status()
     except Exception:
         logger.exception("Cleanup count failed")
         await message.answer(t("admin.cleanup.failed"))
         return
 
     if not total:
-        await message.answer(t("admin.cleanup.nothing", days=days))
+        # Say what IS in the database: "nothing matched" is confusing when the
+        # moderation chat is visibly full of drafts that are merely still pending.
+        await message.answer(
+            t("admin.cleanup.nothing", days=days, breakdown=_format_status_breakdown(breakdown))
+        )
         return
 
     if not confirmed:
-        await message.answer(t("admin.cleanup.preview", count=total, days=days))
+        key = "admin.cleanup.preview_all" if include_pending else "admin.cleanup.preview"
+        await message.answer(t(key, count=total, days=days))
         return
 
     size_before = db.size_bytes()
     try:
-        deleted = await db.delete_processed_submissions(older_than_days=days)
+        deleted = await db.delete_processed_submissions(
+            older_than_days=days, include_pending=include_pending
+        )
         await db.vacuum()
     except Exception:
         logger.exception("Cleanup failed")
@@ -303,20 +311,41 @@ async def cleanup_command(
     )
 
 
-def _parse_cleanup_args(args: str | None) -> tuple[int, bool, str | None]:
-    """Return (days, confirmed, invalid token). Accepts any order: "confirm",
-    "7", "7 confirm", "confirm 7"."""
-    days = _CLEANUP_DEFAULT_DAYS
+def _parse_cleanup_args(args: str | None) -> tuple[int, bool, bool, str | None]:
+    """Return (days, confirmed, include_pending, invalid token).
+
+    Tokens may come in any order: a number is the age window, "confirm" arms the
+    deletion, and "all" widens it to pending submissions as well. "all" on its own
+    means the whole queue, so it drops the age window to 0 unless a number was
+    given too.
+    """
+    days: int | None = None
     confirmed = False
+    include_pending = False
     for token in (args or "").split():
         lowered = token.casefold()
         if lowered == "confirm":
             confirmed = True
+        elif lowered == "all":
+            include_pending = True
         elif lowered.isdigit():
             days = int(lowered)
         else:
-            return days, confirmed, token
-    return days, confirmed, None
+            return _CLEANUP_DEFAULT_DAYS, confirmed, include_pending, token
+
+    if days is None:
+        days = 0 if include_pending else _CLEANUP_DEFAULT_DAYS
+    return days, confirmed, include_pending, None
+
+
+def _format_status_breakdown(counts: dict[str, int]) -> str:
+    labels = (
+        (STATUS_PENDING, t("admin.cleanup.status.pending")),
+        ("published", t("admin.cleanup.status.published")),
+        ("rejected", t("admin.cleanup.status.rejected")),
+    )
+    parts = [f"{label} — {counts.get(status, 0)}" for status, label in labels]
+    return "\n".join(parts)
 
 
 def _format_kilobytes(size_bytes: int) -> str:
