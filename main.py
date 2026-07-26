@@ -128,6 +128,8 @@ async def _apply_command_menu(bot: Bot, config: Config) -> None:
     await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
     logger.info("Bot command menu configured: /start in private chats only.")
 
+    await _apply_admin_chat_commands(bot, config)
+
     if not (config.enable_telegram_moderation and config.telegram_moderation_chat_ids):
         # Per-chat command menus persist server-side across restarts. When the
         # listed chats are no longer moderated, clear their menus so members do
@@ -175,6 +177,32 @@ async def _apply_command_menu(bot: Bot, config: Config) -> None:
                 "Could not set moderator commands for chat %s (is the bot a member there?)",
                 chat_id,
             )
+
+
+async def _apply_admin_chat_commands(bot: Bot, config: Config) -> None:
+    """Make the content commands discoverable in the admin chat only.
+
+    They are gated on ADMIN_USER_IDS at handler level and also work in a DM, but
+    nothing advertised them anywhere, so an admin had to remember the exact
+    spelling. Listing them under the admin chat's own scope keeps them out of
+    every other chat's menu.
+    """
+    if config.admin_chat_id in config.telegram_moderation_chat_ids:
+        # That chat's menu belongs to the moderation scopes below: overwriting its
+        # chat scope here would advertise admin commands to ordinary members.
+        logger.info("Admin chat %s is also moderated; leaving its command menu to moderation.", config.admin_chat_id)
+        return
+
+    admin_commands = [
+        BotCommand(command=name, description=t(f"commands.{name}"))
+        for name in ("fetch_news", "fanartdigest", "wikifact", "cancel")
+    ]
+    try:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=config.admin_chat_id))
+    except TelegramAPIError:
+        logger.info("Could not set the admin command menu for chat %s", config.admin_chat_id)
+        return
+    logger.info("Admin command menu configured for chat %s.", config.admin_chat_id)
 
 
 def _start_news_scheduler_if_enabled(bot: Bot, config: Config, db: Database) -> asyncio.Task | None:
