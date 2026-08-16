@@ -49,6 +49,13 @@ export const ModerationPartCallback = callbackFactory("submission_part", [
 ]);
 export const CollectorCallback = callbackFactory("collector", ["collector_id"]);
 /**
+ * Source picker for /redraft. It gets its OWN prefix rather than a `force` field
+ * on CollectorCallback: `unpack` requires an exact field count, so widening the
+ * collector callback would break every /fetch_news keyboard already sitting in
+ * the admin chat from before the deploy.
+ */
+export const RedraftCallback = callbackFactory("recollect", ["collector_id"]);
+/**
  * Inline moderation action on a mod-log entry (Telegram chat moderation).
  *
  * action: "del" | "mute" | "ban"; chat_id: the moderated chat the offence
@@ -82,6 +89,12 @@ export function unpackModerationPartCallback(data) {
 
 export function unpackCollectorCallback(data) {
   const values = CollectorCallback.unpack(data);
+  if (values === null) return null;
+  return { collector_id: values.collector_id };
+}
+
+export function unpackRedraftCallback(data) {
+  const values = RedraftCallback.unpack(data);
   if (values === null) return null;
   return { collector_id: values.collector_id };
 }
@@ -200,6 +213,14 @@ export function collectorSourceKeyboard(collectors) {
   return {
     inline_keyboard: collectors.map((collector) => [
       button(collector.button_text, CollectorCallback.pack({ collector_id: collector.collector_id })),
+    ]),
+  };
+}
+
+export function redraftSourceKeyboard(collectors) {
+  return {
+    inline_keyboard: collectors.map((collector) => [
+      button(collector.button_text, RedraftCallback.pack({ collector_id: collector.collector_id })),
     ]),
   };
 }

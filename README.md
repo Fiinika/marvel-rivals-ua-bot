@@ -28,7 +28,7 @@ Every source except the official site is opt-in and off by default.
 - the moderation chat shows the publishable post parts first, then a separate metadata/control message with `✅ Approve` / `✏️ Edit` / `❌ Reject`
 - only user IDs listed in `ADMIN_USER_IDS` may act on the buttons
 - admins can edit any part, add new parts, and cancel an active edit with `/cancel`
-- `/fetch_news`, `/fanartdigest`, and `/wikifact` trigger a source or rubric on demand
+- `/fetch_news`, `/fanartdigest`, and `/wikifact` trigger a source or rubric on demand; `/redraft` re-drafts a source's newest item for testing
 
 **Avoids duplicates twice over:** every source tracks what it has already seen, and an optional Gemini check drops an item that retells a story another source already delivered.
 
@@ -397,6 +397,8 @@ Nothing is auto-published. Each generated item is inserted into `submissions` wi
 ```
 
 The command renders one button per **enabled** source, so the menu grows as you switch sources on: `Офіційний сайт` is always there, joined by `Bluesky`, `YouTube`, `Reddit (витоки)`, `RivalSkins (скіни)`, and `Wiki-факти (Чи знали ви?)`. After an admin clicks a source the bot sends a parsing-started status message, processes the single latest unseen item from that source, and reports how many items were found, how many were already seen, how many were new, how many drafts were created, how many were sent to moderation, and how many failed. Only users listed in `ADMIN_USER_IDS` can run it.
+
+`/redraft` shows the same source picker but re-drafts the source's **newest item even though it has already been posted**. A source that has been collecting for a while reports `found 9, duplicates 9, new 0` and produces nothing, which leaves no way to check the pipeline end-to-end after a change; `/cleanup` cannot help, because it deliberately never clears `seen_sources` (that would re-queue every old article at once). It creates exactly ONE draft and writes nothing to `seen_sources`, so rejecting the result leaves no trace — the report ends with a reminder to reject it rather than publish a duplicate.
 
 Two more admin commands trigger the weekly rubrics on demand:
 
@@ -771,7 +773,7 @@ explicitly at startup rather than relying on whatever BotFather was once given:
 - **Private chats** show only `/start`.
 - **The default and all-group scopes are cleared**, so an unmoderated group inherits
   no menu at all.
-- **The admin chat** shows `/fetch_news`, `/fanartdigest`, `/wikifact`, `/cleanup`, and `/cancel`.
+- **The admin chat** shows `/fetch_news`, `/redraft`, `/fanartdigest`, `/wikifact`, `/cleanup`, and `/cancel`.
   This is skipped when the admin chat is itself a moderated chat, so admin commands
   are never advertised to ordinary members.
 - **Each moderated chat** shows `/report` and `/rules` to members, while its

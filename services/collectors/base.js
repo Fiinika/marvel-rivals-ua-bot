@@ -1,8 +1,17 @@
 import { t } from "../i18n.js";
 
+/**
+ * `FORCE_LATEST` re-drafts the newest listing item even though it is already in
+ * `seen_sources`. It exists because a source that has been running for a while
+ * has nothing new by definition, which leaves no way to check the pipeline
+ * end-to-end after a change — /cleanup deliberately never clears `seen_sources`,
+ * since that would re-queue every old article at once. It drafts exactly ONE
+ * item and adds nothing to `seen_sources` that is not there already.
+ */
 export const CollectionMode = Object.freeze({
   MANUAL_LATEST: "manual_latest",
   SCHEDULED_SINCE_LAST: "scheduled_since_last",
+  FORCE_LATEST: "force_latest",
 });
 
 /**

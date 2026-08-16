@@ -107,6 +107,14 @@ export class BaseNewsCollector {
       latestSeenArticleDate = await this.db.getLatestSeenArticleDate(this.definition.source_type);
     }
 
+    if (mode === CollectionMode.FORCE_LATEST) {
+      const candidate = await this.forceLatestCandidate(entries, stats);
+      if (candidate !== null) {
+        await this.createModerationSubmissions(candidate, generator, stats);
+      }
+      return stats;
+    }
+
     if (mode === CollectionMode.MANUAL_LATEST) {
       const candidate = await this.findLatestUnseenCandidate(entries, stats, generator);
       if (candidate !== null) {
@@ -138,6 +146,27 @@ export class BaseNewsCollector {
         }
       }
     }
+  }
+
+  /**
+   * Parse the newest listing item and hand it back regardless of dedup.
+   *
+   * Both dedup checks are skipped ON PURPOSE. The seen-check would reject the
+   * item — being already seen is the whole reason this mode exists — and the
+   * cross-source check would match the article against its own published title
+   * and, worse, mark it seen on the way out. Nothing here writes to
+   * `seen_sources`; the submission that follows is an ordinary moderation draft
+   * an admin can reject, so a forced run leaves no state behind if unused.
+   */
+  async forceLatestCandidate(entries, stats) {
+    const entry = entries[0] ?? null;
+    if (entry === null) {
+      return null;
+    }
+    stats.duplicates = Math.max(0, entries.length - 1);
+    const candidate = await this.parseEntry(entry);
+    stats.new += 1;
+    return candidate;
   }
 
   async findLatestUnseenCandidate(entries, stats, generator) {

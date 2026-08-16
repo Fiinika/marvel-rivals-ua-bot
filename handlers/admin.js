@@ -5,10 +5,12 @@ import {
   collectorSourceKeyboard,
   editPartKeyboard,
   moderationKeyboard,
+  redraftSourceKeyboard,
   saveDraftKeyboard,
   unpackCollectorCallback,
   unpackModerationCallback,
   unpackModerationPartCallback,
+  unpackRedraftCallback,
 } from "../keyboards.js";
 import {
   CollectionMode,
@@ -70,7 +72,17 @@ async function withApproveLock(submissionId, work) {
 const editPromptMessageIds = new Map();
 const URL_PATTERN = /https?:\/\/|www\./i;
 
-export function buildAdminComposer({ config, db, bot }) {
+/**
+ * `registry` is a test seam. The collector registry is a module-level Map with
+ * no injection point, and ESM bindings cannot be spied on, so the handler tests
+ * would otherwise have to reach the network to exercise the run path.
+ */
+export function buildAdminComposer({
+  config,
+  db,
+  bot,
+  registry = { create: createCollector, definition: getCollectorDefinition, list: listCollectorDefinitions },
+}) {
   const composer = new Composer();
 
   const isAdminUser = (userId) => userId !== undefined && config.admin_user_ids.has(userId);
@@ -168,7 +180,34 @@ export function buildAdminComposer({ config, db, bot }) {
     }
 
     await ctx.reply(t("admin.news_fetch.choose_source"), {
-      reply_markup: collectorSourceKeyboard(listCollectorDefinitions(config)),
+      reply_markup: collectorSourceKeyboard(registry.list(config)),
+    });
+  });
+
+  /**
+   * Re-draft the newest item of a source even though it has already been posted.
+   *
+   * A source that has been collecting for a while reports "found 9, duplicates
+   * 9, new 0" and produces nothing, so there is no way to check the pipeline
+   * after a change. /cleanup cannot help: it deliberately leaves `seen_sources`
+   * alone, because clearing it would re-queue every old article at once. This
+   * makes exactly ONE draft from the newest item and writes nothing to
+   * `seen_sources`, so rejecting the result leaves no trace.
+   */
+  composer.command("redraft", async (ctx, next) => {
+    if (!adminOrPrivateChat(ctx)) return next();
+    if (!isAdminUser(ctx.from?.id)) {
+      await ctx.reply(t("admin.news_fetch.no_permission"));
+      return;
+    }
+
+    if (ctx.chat.id !== config.admin_chat_id && chatType(ctx) !== "private") {
+      await ctx.reply(t("admin.news_fetch.wrong_chat"));
+      return;
+    }
+
+    await ctx.reply(t("admin.redraft.choose_source"), {
+      reply_markup: redraftSourceKeyboard(registry.list(config)),
     });
   });
 
@@ -322,8 +361,12 @@ export function buildAdminComposer({ config, db, bot }) {
   });
 
   composer.on("callback_query:data", async (ctx, next) => {
-    const callbackData = unpackCollectorCallback(ctx.callbackQuery.data);
+    // The same picker serves /fetch_news and /redraft; only the run mode and the
+    // status line differ, so they share one handler rather than two near-copies.
+    const redraftData = unpackRedraftCallback(ctx.callbackQuery.data);
+    const callbackData = redraftData ?? unpackCollectorCallback(ctx.callbackQuery.data);
     if (callbackData === null) return next();
+    const forced = redraftData !== null;
 
     const adminId = ctx.callbackQuery.from.id;
     if (!isAdminUser(adminId)) {
@@ -332,8 +375,8 @@ export function buildAdminComposer({ config, db, bot }) {
       return;
     }
 
-    const definition = getCollectorDefinition(callbackData.collector_id);
-    const collector = createCollector(callbackData.collector_id, { config, db, bot });
+    const definition = registry.definition(callbackData.collector_id);
+    const collector = registry.create(callbackData.collector_id, { config, db, bot });
     if (definition === null || collector === null) {
       await answerCallback(ctx, t("admin.news_fetch.unknown_source"), { showAlert: true });
       return;
@@ -342,7 +385,9 @@ export function buildAdminComposer({ config, db, bot }) {
     const callbackMessage = ctx.callbackQuery.message;
     const targetChatId = callbackMessage ? callbackMessage.chat.id : config.admin_chat_id;
     let targetMessageId = callbackMessage ? callbackMessage.message_id : null;
-    const startedText = t("admin.news_fetch.started", { source: definition.title });
+    const startedText = forced
+      ? t("admin.redraft.started", { source: definition.title })
+      : t("admin.news_fetch.started", { source: definition.title });
 
     if (targetMessageId !== null) {
       try {
@@ -366,8 +411,14 @@ export function buildAdminComposer({ config, db, bot }) {
     }
 
     await answerCallback(ctx);
-    const stats = await collector.runOnce(CollectionMode.MANUAL_LATEST);
-    const report = formatCollectionReport(stats);
+    const stats = await collector.runOnce(
+      forced ? CollectionMode.FORCE_LATEST : CollectionMode.MANUAL_LATEST,
+    );
+    const report = forced
+      ? `${formatCollectionReport(stats)}
+
+${t("admin.redraft.notice")}`
+      : formatCollectionReport(stats);
 
     try {
       await bot.api.editMessageText(targetChatId, targetMessageId, report, {

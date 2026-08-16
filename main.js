@@ -198,7 +198,7 @@ export async function applyAdminChatCommands(bot, config) {
     return;
   }
 
-  const adminCommands = ["fetch_news", "fanartdigest", "wikifact", "cleanup", "cancel"].map((name) => ({
+  const adminCommands = ["fetch_news", "redraft", "fanartdigest", "wikifact", "cleanup", "cancel"].map((name) => ({
     command: name,
     description: t(`commands.${name}`),
   }));

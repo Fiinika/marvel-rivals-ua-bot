@@ -43,6 +43,7 @@ it("scopes the admin commands to the admin chat", async () => {
   expect(scope.chat_id).toBe(-4242);
   expect(commands.map((command) => command.command)).toEqual([
     "fetch_news",
+    "redraft",
     "fanartdigest",
     "wikifact",
     "cleanup",
@@ -51,6 +52,7 @@ it("scopes the admin commands to the admin chat", async () => {
   // Descriptions come from the locale, not a placeholder key.
   expect(commands.map((command) => command.description)).toEqual([
     t("commands.fetch_news"),
+    t("commands.redraft"),
     t("commands.fanartdigest"),
     t("commands.wikifact"),
     t("commands.cleanup"),
