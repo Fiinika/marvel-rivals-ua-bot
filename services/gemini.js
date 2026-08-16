@@ -31,6 +31,7 @@ export const SHORT_FORM_PROMPT_PATH = path.join(PROMPTS_DIR, "gemini_shortform_u
 export const STYLE_PROMPT_PATH = path.join(PROMPTS_DIR, "official_news_style.md");
 export const DEDUP_PROMPT_PATH = path.join(PROMPTS_DIR, "gemini_dedup_uk.md");
 export const WIKI_FACT_PROMPT_PATH = path.join(PROMPTS_DIR, "gemini_wiki_fact_uk.md");
+export const WIKI_PICK_PROMPT_PATH = path.join(PROMPTS_DIR, "gemini_wiki_pick_uk.md");
 
 export const POST_SEPARATOR = "---POST---";
 export const TAGS_SEPARATOR = "---TAGS---";
@@ -196,6 +197,22 @@ export class GeminiDraftGenerator {
   }
 
   /**
+   * Choose which shortlisted wiki fact makes the best "Чи знали ви?" post, as a
+   * 0-based index into `facts`. Falls back to 0 — the caller's own top pick — on
+   * anything unexpected, so a formatting quirk costs a slightly duller post
+   * rather than the week's post.
+   */
+  async pickBestTriviaFact(facts) {
+    const options = facts.filter((fact) => fact && fact.trim());
+    if (options.length <= 1) {
+      return 0;
+    }
+    const numbered = options.map((fact, index) => `${index + 1}. ${fact.trim()}`).join("\n");
+    const prompt = formatTemplate(loadWikiPickPromptTemplate(), { facts: numbered });
+    return parseTriviaPick(await this.generateOnce(prompt), options.length);
+  }
+
+  /**
    * One model call, with the same bounded retry the Python version performed
    * inside its worker thread.
    */
@@ -347,6 +364,28 @@ function coerceDuplicateFlag(value) {
     return ["true", "yes", "1"].includes(value.trim().toLowerCase());
   }
   return false;
+}
+
+/**
+ * Read the model's 1-based `pick` back as a 0-based index, failing open to the
+ * first option on anything unexpected or out of range.
+ */
+export function parseTriviaPick(raw, optionCount) {
+  const match = /\{[\s\S]*\}/.exec(cleanResponseText(raw));
+  if (!match) {
+    return 0;
+  }
+  let data;
+  try {
+    data = JSON.parse(match[0]);
+  } catch {
+    return 0;
+  }
+  const pick = Number(data?.pick);
+  if (!Number.isInteger(pick) || pick < 1 || pick > optionCount) {
+    return 0;
+  }
+  return pick - 1;
 }
 
 /**
@@ -1054,6 +1093,10 @@ function loadDedupPromptTemplate() {
   // Read verbatim (no trim): the dedup prompt is used as-is, exactly as the
   // Python loader did for this one file.
   return loadCachedText(DEDUP_PROMPT_PATH, { trim: false });
+}
+
+function loadWikiPickPromptTemplate() {
+  return loadCachedText(WIKI_PICK_PROMPT_PATH);
 }
 
 function loadStylePrompt() {

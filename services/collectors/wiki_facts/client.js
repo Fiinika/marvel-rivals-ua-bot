@@ -15,7 +15,26 @@ const logger = getLogger("services.collectors.wiki_facts.client");
 
 export const DEFAULT_API_URL = "https://marvelrivals.fandom.com/api.php";
 export const DEFAULT_PAGE_BASE = "https://marvelrivals.fandom.com/wiki/";
-export const HEROES_CATEGORY = "Category:Heroes";
+/**
+ * Which wiki categories the rubric draws from.
+ *
+ * `Category:Heroes` alone made the rubric lopsided: a hero page's Trivia is
+ * largely comic-book biography, so the posts kept being "X first appeared in
+ * <comic> (1966) #52" — 116 of the 552 hero bullets are that formula. The other
+ * categories are where the facts ABOUT THE GAME live: map easter eggs and what
+ * changed between seasons (Maps: 157 bullets, exactly one of them a comic
+ * debut), voice actors (Cast), event details (Events), mode history (Game
+ * Modes). Pages with no Trivia section simply yield nothing and are skipped.
+ */
+export const FACT_CATEGORIES = Object.freeze([
+  "Category:Heroes",
+  "Category:Maps",
+  "Category:Locations",
+  "Category:NPCs",
+  "Category:Cast",
+  "Category:Events",
+  "Category:Game Modes",
+]);
 export const USER_AGENT = "MarvelRivalsUACollector/1.0 (Telegram news bot; +https://t.me/MarvelRivalsUABot)";
 export const REQUEST_TIMEOUT_SECONDS = 25.0;
 
@@ -36,9 +55,12 @@ const EXTLINK_RE = /\[https?:\/\/\S+(?:\s+([^\]]+))?\]/g;
 // Bare/raw URLs left after the bracket forms.
 const RAW_URL_RE = /https?:\/\/\S+|www\.\S+/gi;
 const HTML_TAG_RE = /<[^>]+>/g;
-const BULLET_RE = /^\*+[^\S\n]*(.+?)[^\S\n]*$/gm;
+// The leading run of asterisks is CAPTURED: its length is the list nesting depth,
+// and a nested bullet ("** Another statue inside the lobby.") is a continuation of
+// the one above it, which the collector needs in order not to publish it alone.
+const BULLET_RE = /^(\*+)[^\S\n]*(.+?)[^\S\n]*$/gm;
 
-/** @typedef {{hero: string, fact: string, page_url: string}} WikiFact */
+/** @typedef {{hero: string, fact: string, page_url: string, depth: number}} WikiFact */
 
 export class WikiFactsClient {
   constructor(apiUrl = DEFAULT_API_URL, { page_base = DEFAULT_PAGE_BASE } = {}) {
@@ -46,11 +68,34 @@ export class WikiFactsClient {
     this.page_base = page_base;
   }
 
-  async fetchHeroTitles() {
+  /**
+   * Every page the rubric may draw a fact from, de-duplicated across categories.
+   *
+   * A failing category is skipped rather than fatal: losing Maps for a week is a
+   * duller rubric, but losing the whole run because one category 500s is a
+   * missed week.
+   */
+  async fetchPageTitles(categories = FACT_CATEGORIES) {
+    const titles = [];
+    const seen = new Set();
+    for (const category of categories) {
+      // Drop the category's own landing page ("Heroes" in "Category:Heroes").
+      const landingPage = category.replace(/^Category:/, "");
+      for (const title of await this.fetchCategoryTitles(category)) {
+        if (title !== landingPage && !seen.has(title)) {
+          seen.add(title);
+          titles.push(title);
+        }
+      }
+    }
+    return titles;
+  }
+
+  async fetchCategoryTitles(category) {
     const data = await this.get({
       action: "query",
       list: "categorymembers",
-      cmtitle: HEROES_CATEGORY,
+      cmtitle: category,
       cmlimit: "500",
       cmtype: "page",
     });
@@ -58,14 +103,13 @@ export class WikiFactsClient {
       return [];
     }
     const members = data.query?.categorymembers ?? [];
-    // Drop the category's own landing page ("Heroes") and any blank title.
     const titles = [];
     for (const member of members) {
       if (member === null || typeof member !== "object" || Array.isArray(member)) {
         continue;
       }
       const title = String(member.title ?? "").trim();
-      if (title && title !== "Heroes") {
+      if (title) {
         titles.push(title);
       }
     }
@@ -97,7 +141,9 @@ export class WikiFactsClient {
     const wikitext = parsed.parse?.wikitext?.["*"] ?? "";
 
     const pageUrl = `${this.page_base}${quoteUrlPath(hero.replaceAll(" ", "_"))}`;
-    return extractFacts(wikitext).map((fact) => Object.freeze({ hero, fact, page_url: pageUrl }));
+    return extractBullets(wikitext).map((bullet) =>
+      Object.freeze({ hero, fact: bullet.text, page_url: pageUrl, depth: bullet.depth }),
+    );
   }
 
   async get(params) {
@@ -120,21 +166,27 @@ export class WikiFactsClient {
   }
 }
 
-export function extractFacts(wikitext) {
-  const facts = [];
+/** The cleaned bullets with their list nesting depth, in wikitext order. */
+export function extractBullets(wikitext) {
+  const bullets = [];
   BULLET_RE.lastIndex = 0;
   for (const match of String(wikitext ?? "").matchAll(BULLET_RE)) {
-    const fact = cleanFact(match[1]);
+    const fact = cleanFact(match[2]);
     // Drop anything that still carries template markup (e.g. a template nested
     // deeper than the unwrap cap) rather than publish a garbled fact.
     if (fact.includes("{") || fact.includes("}")) {
       continue;
     }
     if (fact.length >= MIN_FACT_LENGTH && fact.length <= MAX_FACT_LENGTH) {
-      facts.push(fact);
+      bullets.push({ text: fact, depth: match[1].length });
     }
   }
-  return facts;
+  return bullets;
+}
+
+/** The cleaned bullet TEXT only — the shape the cleaning tests assert on. */
+export function extractFacts(wikitext) {
+  return extractBullets(wikitext).map((bullet) => bullet.text);
 }
 
 function cleanFact(raw) {

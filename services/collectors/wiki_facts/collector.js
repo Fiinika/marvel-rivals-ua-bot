@@ -18,17 +18,27 @@ import { DateTime } from "luxon";
 
 import { cancellableSleep, createTask } from "../../background.js";
 import { nextWeeklyRunAt, resolveTimezone } from "../../digests/fanart.js";
+import { GeminiDraftGenerator } from "../../gemini.js";
 import { t } from "../../i18n.js";
 import { getLogger } from "../../logger.js";
-import { collapseWhitespace } from "../../pyutils.js";
+import { collapseWhitespace, errorText } from "../../pyutils.js";
 import { CollectionMode, collectorDefinition, draftCandidate, listingEntry } from "../base.js";
 import { BaseNewsCollector } from "../runner.js";
 import { WikiFactsClient } from "./client.js";
+import { FactTier, rejectReason, tierOf } from "./quality.js";
 
 const logger = getLogger("services.collectors.wiki_facts.collector");
 
 export const COLLECTOR_ID = "wiki_facts";
 export const SOURCE_TYPE = "wiki_facts";
+
+// How wide to cast the net before choosing. A hero has a median of 7 bullets, so
+// three heroes usually fill the shortlist; the cap keeps a bad week (heroes with
+// only nested bullets left) from walking the whole roster.
+const SHORTLIST_SIZE = 8;
+const MIN_HEROES_SCANNED = 3;
+const MAX_HEROES_SCANNED = 8;
+const MAX_PER_HERO = 2;
 
 export const DEFINITION = collectorDefinition({
   collector_id: COLLECTOR_ID,
@@ -52,37 +62,94 @@ export class WikiFactsCollector extends BaseNewsCollector {
     return t("collectors.wiki_facts.errors.missing_gemini_api_key");
   }
 
+  /**
+   * Return every fact scanned this run, ordered so the one we WANT published is
+   * the first unseen element.
+   *
+   * The runner publishes `entries[first unseen]`, so this method is the only
+   * place selection can happen. It walks a shuffled slice of the roster, keeps
+   * the bullets that can stand on their own as a post (see quality.js), builds a
+   * shortlist, and puts the winner in front of the other unseen entries. The
+   * already-seen entries stay at the head of the list so `stats.found` and
+   * `stats.duplicates` still describe the whole scan.
+   */
   async fetchListing() {
-    const heroes = await this.client.fetchHeroTitles();
+    const heroes = await this.client.fetchPageTitles();
     if (!heroes.length) {
       return [];
     }
 
     shuffleInPlace(heroes);
-    const entries = [];
+    const seenEntries = [];
+    const scanned = [];
+    let eligibleFound = 0;
     for (const hero of heroes) {
       const facts = await this.client.fetchTriviaFacts(hero);
-      const heroEntries = facts.map((fact) => listingEntry(factId(fact), fact));
-      entries.push(...heroEntries);
-      // Stop as soon as a hero contributes an UNSEEN fact — the common case is
-      // the first hero, so we rarely scan more than one. But keep walking the
-      // (shuffled) roster while everything seen so far is already posted, so a
-      // depleted random sample never silently starves the weekly rubric; we
-      // only give up once the whole roster is exhausted.
-      if (await this.hasUnseen(heroEntries)) {
+      const unseen = [];
+      let seenCount = 0;
+      for (const fact of facts) {
+        const entry = listingEntry(factId(fact), fact);
+        if (await this.db.isSourceSeen(SOURCE_TYPE, entry.dedup_key)) {
+          seenEntries.push(entry);
+          seenCount += 1;
+          continue;
+        }
+        unseen.push({ entry, tier: rejectReason(fact) === null ? tierOf(fact) : null });
+      }
+      if (!unseen.length) {
+        continue;
+      }
+      scanned.push({ seen_count: seenCount, unseen });
+      eligibleFound += unseen.filter((item) => item.tier !== null && item.tier !== FactTier.FORMULAIC).length;
+      // Enough to choose from, and from enough different heroes to make the
+      // choice a real one. The roster walk continues past a fully-seen hero, so
+      // a depleted sample still cannot starve the weekly rubric.
+      if (eligibleFound >= SHORTLIST_SIZE && scanned.length >= MIN_HEROES_SCANNED) {
+        break;
+      }
+      if (scanned.length >= MAX_HEROES_SCANNED) {
         break;
       }
     }
-    return entries;
+
+    if (!scanned.length) {
+      return seenEntries;
+    }
+
+    const shortlist = buildShortlist(scanned);
+    const rest = scanned.flatMap((hero) => hero.unseen.map((item) => item.entry));
+    if (!shortlist.length) {
+      // Every unseen bullet this run is a nested/dangling one. Publishing an
+      // orphan reads worse than skipping, so hand the runner only seen entries
+      // and let runWikiFactsOnce log the empty week.
+      return seenEntries;
+    }
+
+    const winner = await this.chooseFact(shortlist);
+    return [...seenEntries, winner, ...rest.filter((entry) => entry !== winner)];
   }
 
-  async hasUnseen(entries) {
-    for (const entry of entries) {
-      if (!(await this.db.isSourceSeen(SOURCE_TYPE, entry.dedup_key))) {
-        return true;
-      }
+  /**
+   * Pick one entry out of the shortlist.
+   *
+   * Gemini reads the shortlist and picks the fact that works best as a "Чи знали
+   * ви?" post — it catches what a regex cannot (a sentence that only makes sense
+   * next to its neighbour, a fact that is really two facts, a joke that does not
+   * survive translation). It fails open to the shortlist head, which is already
+   * the highest-tier fact of the freshest hero.
+   */
+  async chooseFact(shortlist) {
+    if (!this.config.gemini_api_key || shortlist.length === 1) {
+      return shortlist[0];
     }
-    return false;
+    const generator = new GeminiDraftGenerator(this.config.gemini_api_key, this.config.gemini_model);
+    try {
+      const index = await generator.pickBestTriviaFact(shortlist.map((entry) => entry.payload.fact));
+      return shortlist[index] ?? shortlist[0];
+    } catch (error) {
+      logger.warning(`Wiki-fact shortlist pick failed; using the top-ranked fact. ${errorText(error)}`);
+      return shortlist[0];
+    }
   }
 
   async parseEntry(entry) {
@@ -103,6 +170,32 @@ export class WikiFactsCollector extends BaseNewsCollector {
       additional_media_urls: null,
     });
   }
+}
+
+/**
+ * Order the shortlist: freshest hero first (fewest facts of theirs already
+ * published, which spreads the rubric across the roster instead of mining one
+ * hero), then by tier, and at most MAX_PER_HERO from any one hero so a
+ * 104-bullet page like Deadpool cannot fill the whole shortlist.
+ */
+function buildShortlist(scanned) {
+  const byFreshness = [...scanned].sort((left, right) => left.seen_count - right.seen_count);
+  const shortlist = [];
+  for (const tier of [FactTier.INTERESTING, FactTier.PLAIN, FactTier.NESTED, FactTier.FORMULAIC]) {
+    for (const hero of byFreshness) {
+      const matching = hero.unseen.filter((item) => item.tier === tier);
+      shuffleInPlace(matching);
+      for (const item of matching.slice(0, MAX_PER_HERO)) {
+        if (shortlist.length < SHORTLIST_SIZE) {
+          shortlist.push(item.entry);
+        }
+      }
+    }
+    if (shortlist.length >= SHORTLIST_SIZE) {
+      break;
+    }
+  }
+  return shortlist;
 }
 
 /** Fisher-Yates, the direct equivalent of `random.shuffle`. */

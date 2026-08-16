@@ -9,9 +9,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { buildAdminComposer } from "../handlers/admin.js";
 import { listingEntry } from "../services/collectors/base.js";
 import { BaseNewsCollector } from "../services/collectors/runner.js";
-import { extractFacts } from "../services/collectors/wiki_facts/client.js";
+import { extractBullets, extractFacts } from "../services/collectors/wiki_facts/client.js";
 import * as wikiCollector from "../services/collectors/wiki_facts/collector.js";
 import { WikiFactsCollector } from "../services/collectors/wiki_facts/collector.js";
+import { FactTier, rejectReason, tierOf } from "../services/collectors/wiki_facts/quality.js";
 import { __testing, geminiDraftInput } from "../services/gemini.js";
 import { t } from "../services/i18n.js";
 import { dispatch, fakeBot, messageUpdate, sentTexts } from "./helpers/telegram.js";
@@ -109,7 +110,7 @@ function buildCollector(facts, { db = new FakeDb() } = {}) {
     bot: null,
   });
   collector.client = {
-    async fetchHeroTitles() {
+    async fetchPageTitles() {
       return Object.keys(facts);
     },
     async fetchTriviaFacts(hero) {
@@ -207,14 +208,69 @@ it("opts the collector out of cross-source dedup", () => {
   expect(BaseNewsCollector.participates_in_cross_source_dedup).toBe(true);
 });
 
-it("stops at the first hero with an unseen fact", async () => {
-  // Deterministic order; all facts unseen -> stop after the first hero (cheap).
+it("scans several heroes and puts the chosen fact first among the unseen", async () => {
+  // The runner publishes the first UNSEEN entry, so fetchListing has to do the
+  // choosing. It now samples more than one hero to have something to choose from.
   stubShuffleAsIdentity();
   const f1 = wikiFact("Magik", "Magik can teleport through Limbo stepping discs.", "https://w/Magik");
   const f2 = wikiFact("Blade", "Blade is a Dhampir, half human and half vampire.", "https://w/Blade");
   const entries = await buildCollector({ Magik: [f1], Blade: [f2] }).fetchListing();
 
-  expect(entries.map((entry) => entry.dedup_key)).toEqual([factId(f1)]);
+  expect(entries.map((entry) => entry.dedup_key)).toEqual([factId(f1), factId(f2)]);
+});
+
+it("passes over a bullet that cannot stand on its own", async () => {
+  // A nested bullet continues the one above it, so publishing it alone would
+  // read as an orphan; the standalone fact of the next hero wins instead.
+  stubShuffleAsIdentity();
+  const orphan = { ...wikiFact("Magik", "Another statue stands inside the lobby.", "https://w/Magik"), depth: 2 };
+  const good = wikiFact("Blade", "Blade is voiced by Todd Williams in Marvel Rivals.", "https://w/Blade");
+  const entries = await buildCollector({ Magik: [orphan], Blade: [good] }).fetchListing();
+
+  expect(entries[0].dedup_key).toBe(factId(good));
+});
+
+it("prefers an interesting fact over the formulaic comic debut", async () => {
+  stubShuffleAsIdentity();
+  const debut = wikiFact("Magik", 'Magik\'s first appearance was in "Giant-Size X-Men" (1975) #1 in July 1975.', "https://w/Magik");
+  const easterEgg = wikiFact("Magik", "Magik's Soulsword emote is a reference to the X-Men '97 finale.", "https://w/Magik");
+  const entries = await buildCollector({ Magik: [debut, easterEgg] }).fetchListing();
+
+  expect(entries[0].dedup_key).toBe(factId(easterEgg));
+});
+
+it("still offers a debut fact when it is all a hero has", async () => {
+  // Demotion, not exclusion: a hero whose Trivia is one debut line is still
+  // publishable, so the weekly rubric never silently skips a week.
+  stubShuffleAsIdentity();
+  const debut = wikiFact("Magik", 'Magik\'s first appearance was in "Giant-Size X-Men" (1975) #1 in July 1975.', "https://w/Magik");
+  const entries = await buildCollector({ Magik: [debut] }).fetchListing();
+
+  expect(entries[0].dedup_key).toBe(factId(debut));
+});
+
+it("keeps the wikitext nesting depth", () => {
+  const bullets = extractBullets("* A top-level bullet about the hero and their powers.\n** A nested continuation of it.\n");
+  expect(bullets.map((bullet) => bullet.depth)).toEqual([1, 2]);
+});
+
+it("rejects only the bullets that cannot stand alone", () => {
+  const reject = (fact, depth = 1) => rejectReason({ hero: "Magneto", fact, depth });
+  expect(reject("Magneto has several references to the comics:")).toBe("list_header");
+  expect(reject("Another huge statue stands inside the lobby.", 2)).toBe("nested");
+  expect(reject("This song also plays during his ultimate.")).toBe("dangling_opener");
+  // A demonstrative that names the hero, and an existential "there", are fine.
+  expect(reject("This version of Magneto is from the 2099 timeline.")).toBeNull();
+  expect(reject("There is a secret voice line on the Klyntar map.")).toBeNull();
+  // The hero's own pronouns are resolvable from the post title, so they stay.
+  expect(reject("His signature is written in the Krakoan language.")).toBeNull();
+});
+
+it("demotes the formulaic debut but not an in-game first", () => {
+  const tier = (fact) => tierOf({ hero: "Magneto", fact });
+  expect(tier('Magneto\'s first appearance was in "X-Men" (1963) #1 in September 1963.')).toBe(FactTier.FORMULAIC);
+  expect(tier("Magneto is voiced by Dan Donohue, reprising his role.")).toBe(FactTier.INTERESTING);
+  expect(tier("Magneto was datamined from multiple sources in December 2024.")).toBe(FactTier.PLAIN);
 });
 
 it("keeps scanning when the first heroes are all seen", async () => {
