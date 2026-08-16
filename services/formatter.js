@@ -1,0 +1,191 @@
+import { t, tOptional } from "./i18n.js";
+import { formatPostHtml } from "./post_footer.js";
+import { htmlEscape, pyTitle, rstrip } from "./pyutils.js";
+
+export const MAX_PREVIEW_TEXT_LENGTH = 1200;
+export const MAX_SOURCE_DRAFT_PREVIEW_LENGTH = 800;
+
+export function formatAdminPreview(submission) {
+  if (submission.source_type) {
+    return formatSourceAdminPreview(submission);
+  }
+
+  const username = submission.username;
+  const usernameText = username ? `@${htmlEscape(username)}` : t("formatter.none");
+  const status = String(submission.status);
+  const statusText = tOptional(`status.${status}`, status);
+
+  return [
+    `<b>${htmlEscape(t("formatter.labels.title", { submission_id: submission.id }))}</b>`,
+    `<b>${htmlEscape(t("formatter.labels.author"))}:</b> ${usernameText}`,
+    `<b>${htmlEscape(t("formatter.labels.user_id"))}:</b> <code>${submission.user_id}</code>`,
+    `<b>${htmlEscape(t("formatter.labels.type"))}:</b> <code>${htmlEscape(String(submission.message_type))}</code>`,
+    `<b>${htmlEscape(t("formatter.labels.file"))}:</b> ${formatFileId(submission.file_id)}`,
+    `<b>${htmlEscape(t("formatter.labels.media_url"))}:</b> ${formatInlineValue(submission.media_url)}`,
+    `<b>${htmlEscape(t("formatter.labels.source_url"))}:</b> ${formatInlineValue(submission.source_url)}`,
+    `<b>${htmlEscape(t("formatter.labels.article_date"))}:</b> ` +
+      `${formatInlineValue(submission.article_date_display)}`,
+    `<b>${htmlEscape(t("formatter.labels.tags"))}:</b> ${formatTags(submission.tags)}`,
+    `<b>${htmlEscape(t("formatter.labels.media_message"))}:</b> ` +
+      `${formatMessageId(submission.admin_media_message_id)}`,
+    "",
+    `<b>${htmlEscape(t("formatter.labels.status"))}:</b> <code>${htmlEscape(statusText)}</code>`,
+    `<b>${htmlEscape(t("formatter.labels.created_at"))}:</b> <code>${htmlEscape(String(submission.created_at))}</code>`,
+    `<b>${htmlEscape(t("formatter.labels.updated_at"))}:</b> <code>${htmlEscape(String(submission.updated_at))}</code>`,
+    `<b>${htmlEscape(t("formatter.labels.published_at"))}:</b> ` +
+      `<code>${htmlEscape(String(submission.published_at || t("formatter.dash")))}</code>`,
+  ].join("\n");
+}
+
+function formatSourceAdminPreview(submission) {
+  const status = String(submission.status);
+  const statusText = tOptional(`status.${status}`, status);
+  const title = extractArticleTitle(String(submission.original_text || ""));
+  const sourceLabel = formatSourceLabel(String(submission.source_type || ""));
+  const category = detectSourceCategory(submission.tags);
+
+  return [
+    `<b>${htmlEscape(t("formatter.labels.title", { submission_id: submission.id }))}</b>`,
+    `<b>Джерело:</b> <code>${htmlEscape(sourceLabel)}</code>`,
+    `<b>Заголовок:</b> ${formatInlinePlain(title)}`,
+    `<b>Тип:</b> ${formatInlinePlain(category)}`,
+    `<b>${htmlEscape(t("formatter.labels.article_date"))}:</b> ` +
+      `${formatInlineValue(submission.article_date_display)}`,
+    "",
+    "<b>Чернетка:</b>",
+    formatSourcePublicDraftBlock(submission),
+    "",
+    `<b>${htmlEscape(t("formatter.labels.source_url"))}:</b> ${formatInlineValue(submission.source_url)}`,
+    `<b>${htmlEscape(t("formatter.labels.media_url"))}:</b> ${formatInlineValue(submission.media_url)}`,
+    `<b>${htmlEscape(t("formatter.labels.tags"))}:</b> ${formatTags(submission.tags)}`,
+    `<b>${htmlEscape(t("formatter.labels.status"))}:</b> <code>${htmlEscape(statusText)}</code>`,
+  ].join("\n");
+}
+
+function formatSourcePublicDraftBlock(submission) {
+  return formatPostHtml(String(submission.draft_text || ""), {
+    source_url: String(submission.source_url || ""),
+    allow_source_link: true,
+    include_community_footer: true,
+  });
+}
+
+function formatFileId(fileId) {
+  if (!fileId) {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  return `<code>${htmlEscape(shortFileId(fileId))}</code>`;
+}
+
+function formatInlineValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  return `<code>${htmlEscape(truncate(String(value), 160))}</code>`;
+}
+
+function formatInlinePlain(value) {
+  if (value === null || value === undefined || value === "") {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  return htmlEscape(truncate(String(value), 180));
+}
+
+function formatMessageId(messageId) {
+  if (messageId === null || messageId === undefined) {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  return `<code>${htmlEscape(String(messageId))}</code>`;
+}
+
+function formatTags(tags) {
+  if (!tags || (Array.isArray(tags) && tags.length === 0)) {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  const values = Array.isArray(tags)
+    ? tags.map((tag) => String(tag)).filter((tag) => tag.trim())
+    : [String(tags)];
+
+  if (!values.length) {
+    return `<i>${htmlEscape(t("formatter.none"))}</i>`;
+  }
+
+  return values.map((value) => `<code>${htmlEscape(value)}</code>`).join(", ");
+}
+
+function shortFileId(fileId) {
+  if (fileId.length <= 24) {
+    return fileId;
+  }
+
+  return `${fileId.slice(0, 10)}…${fileId.slice(-10)}`;
+}
+
+function extractArticleTitle(originalText) {
+  const prefix = t("collectors.common.original_text.article_title", { value: "" });
+  for (const line of originalText.split("\n")) {
+    if (line.startsWith(prefix)) {
+      return line.slice(prefix.length).trim();
+    }
+  }
+
+  return null;
+}
+
+export const SOURCE_LABELS = {
+  official_marvel_rivals: "Official Marvel Rivals",
+  bluesky: "Bluesky",
+  youtube: "YouTube",
+  reddit: "Reddit",
+};
+
+function formatSourceLabel(sourceType) {
+  if (!sourceType) {
+    return t("formatter.none");
+  }
+
+  return SOURCE_LABELS[sourceType] || pyTitle(sourceType.replaceAll("_", " "));
+}
+
+function detectSourceCategory(tags) {
+  let normalizedTags;
+  if (Array.isArray(tags)) {
+    normalizedTags = new Set(tags.map((tag) => String(tag).trim().toLowerCase()));
+  } else if (tags) {
+    normalizedTags = new Set([String(tags).trim().toLowerCase()]);
+  } else {
+    normalizedTags = new Set();
+  }
+
+  const categoryRules = [
+    [["патч"], "Patch notes / game update"],
+    [["магазин", "скіни"], "Shop / skins / bundles"],
+    [["івент"], "Event / rewards"],
+    [["трейлер"], "Trailer / teaser"],
+    [["голосування"], "Vote / community choice"],
+    [["карта", "геймплей"], "Map / gameplay"],
+    [["технічніроботи"], "Maintenance"],
+    [["рейтинг"], "Ranked / competitive"],
+    [["кіберспорт"], "Esports"],
+    [["анонс"], "Short announcement"],
+  ];
+  for (const [ruleTags, label] of categoryRules) {
+    if (ruleTags.some((tag) => normalizedTags.has(tag))) {
+      return label;
+    }
+  }
+
+  return t("formatter.none");
+}
+
+function truncate(value, maxLength) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${rstrip(value.slice(0, maxLength - 1))}…`;
+}

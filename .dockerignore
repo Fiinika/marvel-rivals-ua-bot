@@ -13,17 +13,21 @@ README.md
 *.db
 *.db-journal
 
-# Python caches and virtualenvs.
-__pycache__/
-*.py[cod]
+# Installed dependencies (the image runs `npm ci` itself) and tooling caches.
+node_modules/
+coverage/
 .venv/
 venv/
-.ci-probe-venv/
+__pycache__/
+*.py[cod]
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
 
-# Deploy tooling and editor cruft (not needed inside the image).
+# Tests and deploy tooling (not needed inside the image).
+tests/
+vitest.config.js
+eslint.config.js
 Dockerfile
 docker-compose*.yml
 scripts/

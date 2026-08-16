@@ -1,1 +1,0 @@
-"""News collector package."""

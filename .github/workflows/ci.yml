@@ -2,18 +2,19 @@
 #
 # Runs on every push to main and every pull request targeting main; a new push
 # to the same ref cancels any in-flight run. The single `check` job:
-#   1. installs the dependency set (also proves requirements.txt resolves),
-#   2. byte-compiles every module and imports the entrypoint — the Python
-#      analogue of a build, catching syntax and import-time errors,
-#   3. runs the unit tests (pure moderation logic, config parsers, DB backup),
-#   4. lints with Ruff.
+#   1. installs the locked dependency set (also proves package-lock.json resolves),
+#   2. imports the entrypoint — the JavaScript analogue of a build, catching
+#      syntax and import-time errors across the whole module graph,
+#   3. runs the unit tests (pure moderation logic, config parsers, collectors,
+#      the publisher/album paths, DB backup),
+#   4. lints with ESLint.
 #
 # The bot stores its data in a local SQLite file (DATABASE_PATH, default
-# bot.db), so CI needs no database service container — there is nothing to
-# provision. Postgres is intentionally not part of this pipeline.
+# bot.db) through Node's built-in node:sqlite, so CI needs no database service
+# container and no native build toolchain — there is nothing to provision.
+# Postgres is intentionally not part of this pipeline.
 #
-# Ruff and pytest are pinned so CI results are reproducible; bump deliberately.
-# Formatting (`ruff format --check`) is intentionally not enforced here.
+# Formatting is intentionally not enforced here.
 
 name: CI
 
@@ -35,26 +36,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements.txt
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff==0.15.15 pytest==8.4.1
+        run: npm ci
 
-      - name: Build (byte-compile + import check)
-        run: |
-          python -m compileall -q .
-          python -c "import main"
+      - name: Build (import check)
+        run: node --input-type=module -e "await import('./main.js')"
 
       - name: Test
-        run: pytest -q
+        run: npm test
 
       - name: Lint
-        run: ruff check .
+        run: npm run lint

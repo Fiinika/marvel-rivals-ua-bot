@@ -46,46 +46,54 @@ Publication stays fully manual by design — the bot never posts without an admi
 - role management inside Telegram (admin access comes only from `ADMIN_USER_IDS`)
 - video parsing for the official news site (that source is photo-only; Bluesky and YouTube do carry video)
 
-Each source is a `BaseNewsCollector` subclass registered in `services/collectors/registry.py`, so a new one reuses the whole moderation, dedup, and publishing flow.
+Each source is a `BaseNewsCollector` subclass registered in `services/collectors/registry.js`, so a new one reuses the whole moderation, dedup, and publishing flow.
 
 ## Project Structure
 
 ```text
-main.py                      entrypoint: config, DB, routers, command menus, background tasks
-config.py                    the frozen Config dataclass and load_config()
-database.py                  aiosqlite layer (submissions, parts, seen_sources, tags, warnings)
-keyboards.py                 inline keyboards and callback data
-discord_moderation.py        optional, self-contained Discord moderation bot
+main.js                      entrypoint: config, DB, composers, command menus, background tasks
+config.js                    the frozen config object and loadConfig()
+database.js                  node:sqlite layer (submissions, parts, seen_sources, tags, warnings)
+keyboards.js                 inline keyboards and callback data
+discord_moderation.js        optional, self-contained Discord moderation bot
 handlers/
-  user.py                    private-DM submission flow
-  admin.py                   moderation queue, part editing, admin commands
-  moderation.py              Telegram group-chat moderation router
+  user.js                    private-DM submission flow
+  admin.js                   moderation queue, part editing, admin commands
+  moderation.js              Telegram group-chat moderation composer
 services/
   collectors/
-    base.py                  lightweight collector types shared with the UI
-    runner.py                BaseNewsCollector: the orchestration engine every source subclasses
-    registry.py              source registry, enable gates, and the periodic tick
-    throttle.py              minimum gap between moderation sends within one tick
-    official_marvel_rivals/  news_fetcher.py, article_parser.py, collector.py
-    bluesky/                 feed_fetcher.py, video.py (getBlob MP4), collector.py
-    youtube/                 feed_fetcher.py (channel Atom feed), collector.py
-    reddit/                  feed_fetcher.py (flair search.rss), collector.py
-    rivalskins/              feed_fetcher.py (WordPress RSS), collector.py
-    wiki_facts/              client.py (Fandom api.php), collector.py + weekly scheduler
+    base.js                  lightweight collector types shared with the UI
+    runner.js                BaseNewsCollector: the orchestration engine every source extends
+    registry.js              source registry, enable gates, and the periodic tick
+    throttle.js              minimum gap between moderation sends within one tick
+    official_marvel_rivals/  news_fetcher.js, article_parser.js, collector.js
+    bluesky/                 feed_fetcher.js, video.js (getBlob MP4), collector.js
+    youtube/                 feed_fetcher.js (channel Atom feed), collector.js
+    reddit/                  feed_fetcher.js (flair search.rss), collector.js
+    rivalskins/              feed_fetcher.js (WordPress RSS), collector.js
+    wiki_facts/              client.js (Fandom api.php), collector.js + weekly scheduler
   digests/
-    fanart.py                weekly fan-art album digest
-  chat_moderation.py         pure Telegram moderation rules (no aiogram)
-  date_utils.py              article date/timezone parsing
-  db_backup.py               nightly VACUUM INTO snapshots
-  formatter.py               admin moderation preview
-  gemini.py                  prompts, drafts, hashtags, cross-source dedup verdict
-  i18n.py                    JSON translation lookup
-  media_parser.py            article image extraction
-  moderation.py              sending a submission into the moderation chat
-  post_footer.py             community footer and source attribution
-  publisher.py               publishing: text, photo, album, native video
-  telegram_retry.py          retries, timeouts, inter-message spacing
-  youtube_video.py           yt-dlp download for native video re-upload
+    fanart.js                weekly fan-art album digest
+  background.js              cancellable scheduler tasks (the asyncio.Task analogue)
+  chat_moderation.js         pure Telegram moderation rules (no Telegram I/O)
+  date_utils.js              article date/timezone parsing
+  db_backup.js               nightly VACUUM INTO snapshots
+  formatter.js               admin moderation preview
+  gemini.js                  prompts, drafts, hashtags, cross-source dedup verdict
+  html.js                    cheerio helpers with BeautifulSoup get_text semantics
+  i18n.js                    JSON translation lookup
+  logger.js                  the log-line format the deploy playbook greps for
+  media_parser.js            article image extraction
+  moderation.js              sending a submission into the moderation chat
+  post_footer.js             community footer and source attribution
+  publisher.js               publishing: text, photo, album, native video
+  pyutils.js                 Python-semantics shims (strip, format, ISO timestamps)
+  telegram_errors.js         grammY error classification
+  telegram_html.js           re-render a message as HTML (the aiogram html_text analogue)
+  telegram_retry.js          retries, timeouts, inter-message spacing
+  urlutils.js                urlsplit/urljoin with urllib semantics
+  xml.js                     feed parsing with DTDs and entities refused
+  youtube_video.js           InnerTube download for native video re-upload
 prompts/
   gemini_news_uk.md          long-form official article draft
   gemini_shortform_uk.md     concise social/leak posts
@@ -96,16 +104,16 @@ locales/
   uk.json                    every user-visible string
 scripts/
   deploy-remote.sh           remote rollout streamed over SSH by the deploy workflow
-  setup_lft_forum.py         one-off Discord LFT forum setup helper
-tests/                       pytest suite (one module per subsystem)
-.github/workflows/           ci.yml (compile, import, pytest, ruff) and deploy.yml
-Dockerfile                   python:3.12-slim image, unprivileged, no inbound ports
+  setup_lft_forum.js         one-off Discord LFT forum setup helper
+tests/                       vitest suite (one module per subsystem)
+.github/workflows/           ci.yml (install, import, vitest, eslint) and deploy.yml
+Dockerfile                   node:24-slim image, unprivileged, no inbound ports
 docker-compose.prod.yml      production composition with the botdata volume
 telegram_rules.txt           editable chat rules shown in the welcome message
 telegram_badwords.txt        editable blocked-word list for Telegram moderation
 discord_rules.txt            editable Discord rules
 discord_badwords.txt         editable blocked-word list for Discord moderation
-requirements.txt
+package.json                 dependencies and the start / test / lint scripts
 .env.example
 ```
 
@@ -198,26 +206,17 @@ ADMIN_USER_IDS=111111111,222222222,333333333
 
 ## Install Dependencies
 
-Use Python 3.11 or newer.
+Use Node.js 24 or newer (the database layer uses the built-in `node:sqlite` module).
 
 ```bash
 cd marvel-rivals-ua-submission-bot
-python -m venv .venv
+npm install
 ```
 
-On Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-On macOS or Linux:
-
-```bash
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
+That is the whole toolchain. There is no native build step (the database is
+Node's built-in `node:sqlite`) and no external executable to install — native
+YouTube video re-upload runs on `youtubei.js`, a JavaScript client for
+YouTube's private InnerTube API.
 
 ## Create `.env`
 
@@ -318,7 +317,7 @@ FANART_DIGEST_COUNT=10
 - `ENABLE_BLUESKY_VIDEO_DOWNLOAD` (**on by default**) — resolves a video post to its original MP4 and re-uploads it as a native Telegram video. Off, or above `BLUESKY_VIDEO_MAX_MB` (default `48`), the post degrades to text.
 - `YOUTUBE_CHANNEL_ID` — default `UCWzmOSSiSPbVnVu3ZAyDx2w`, the official @MarvelRivals channel.
 - `YOUTUBE_EXCLUDE_KEYWORDS` — a comma-separated title blocklist, matched case-insensitively as substrings. Left empty it keeps the built-in esports-VOD list (`grand final`, `group stage`, `playoff`, `qualifier`, `invitational`, `highlights`, `esports`). Any value you set **replaces** that list; `-` or `none` disables filtering.
-- `ENABLE_YOUTUBE_VIDEO_DOWNLOAD` (**on by default**) — downloads the video with yt-dlp and re-uploads it natively, up to `YOUTUBE_VIDEO_MAX_MB` (default `48`). Off or too large, the post falls back to a large playable link preview.
+- `ENABLE_YOUTUBE_VIDEO_DOWNLOAD` (**on by default**) — downloads the video and re-uploads it natively, up to `YOUTUBE_VIDEO_MAX_MB` (default `48`). Off, too large, or refused by YouTube, the post falls back to a large playable link preview.
 - `REDDIT_SUBREDDIT` — without the `r/` prefix, default `MarvelRivalsLeaks`.
 - `REDDIT_FLAIRS` — comma-separated flairs combined with `OR` into one search query. Empty keeps the default `Official News,Reliable,Confirmed`.
 - `REDDIT_EXCLUDE_KEYWORDS` — title blocklist, default `megathread` (recurring sticky threads). `-` or `none` disables it.
@@ -331,7 +330,7 @@ The community navigation footer is always appended to every published post. Its 
 ## Run Locally
 
 ```bash
-python main.py
+npm start
 ```
 
 On startup the bot validates required environment variables, initializes SQLite tables, and starts polling Telegram.
@@ -360,7 +359,7 @@ On startup the bot validates required environment variables, initializes SQLite 
 
 ## Content Sources
 
-Six sources are registered in `services/collectors/registry.py`. Each is a `BaseNewsCollector` subclass, so they all share the same pipeline: fetch a listing, skip what has already been seen, ask Gemini for a Ukrainian draft, and queue it for moderation.
+Six sources are registered in `services/collectors/registry.js`. Each is a `BaseNewsCollector` subclass, so they all share the same pipeline: fetch a listing, skip what has already been seen, ask Gemini for a Ukrainian draft, and queue it for moderation.
 
 | Source | Enabled by | What it brings | Media |
 | --- | --- | --- | --- |
@@ -439,7 +438,7 @@ Sources in a tick run one after another rather than in parallel, so each one's d
 
 ### Prompts and text
 
-The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official articles (plus the editable style guide in `prompts/official_news_style.md`), `prompts/gemini_shortform_uk.md` for social and leak posts, and `prompts/gemini_wiki_fact_uk.md` for trivia. A fourth prompt, `prompts/gemini_dedup_uk.md`, backs the cross-source duplicate check rather than any single source. Update the style guide to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing Python code. All three drafting prompts also carry the same proper-noun rules, so the channel reads consistently: hero names in Ukrainian (an established equivalent where one exists, otherwise transliterated), while skin, map, mode, event, and comic titles stay in the original — those are what players search for. Feed titles and bodies are passed to Gemini as untrusted data with an explicit instruction not to obey anything embedded in them. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
+The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official articles (plus the editable style guide in `prompts/official_news_style.md`), `prompts/gemini_shortform_uk.md` for social and leak posts, and `prompts/gemini_wiki_fact_uk.md` for trivia. A fourth prompt, `prompts/gemini_dedup_uk.md`, backs the cross-source duplicate check rather than any single source. Update the style guide to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing code. All three drafting prompts also carry the same proper-noun rules, so the channel reads consistently: hero names in Ukrainian (an established equivalent where one exists, otherwise transliterated), while skin, map, mode, event, and comic titles stay in the original — those are what players search for. Feed titles and bodies are passed to Gemini as untrusted data with an explicit instruction not to obey anything embedded in them. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
 
 ### The weekly rubrics
 
@@ -489,18 +488,20 @@ The official site is photo-only: the parser prefers Open Graph images, Twitter c
 The other sources go further:
 
 - **Albums.** A single-part draft with two or more photos — a Bluesky post with several infographics, or the fan-art digest — becomes one Telegram media group. Album images are downloaded and re-uploaded as bytes rather than sent by URL, because Telegram refuses by-URL photos above roughly 5 MB while a bytes upload allows 10 MB. Images are capped at 10 MiB and must be JPEG, PNG, or WebP. A media group is atomic, so if Telegram rejects one item the publisher drops that image and retries with the rest.
-- **Native video.** YouTube videos are downloaded with yt-dlp (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text with a link preview.
+- **Native video.** YouTube videos are downloaded through YouTube's own InnerTube API with `youtubei.js` (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text with a link preview.
+
+  The stream URL is scrambled by a function inside YouTube's player script. `services/youtube_video.js` runs that function in a `node:vm` realm whose global object is empty — no `process`, no `require`, no `fetch` — with a hard timeout, so third-party script has nothing to reach the bot token or the database with. It also prefers YouTube's app clients, because the `WEB` client now demands a Proof-of-Origin token and answers 403 without one. If YouTube tightens that further, the download simply fails and the post degrades to the link preview.
 - **Moderation shows the real thing.** Albums and native videos are previewed in the moderation chat exactly as they will be published, so an admin approves what actually goes out. The cost is that a video is downloaded twice — once for the preview, once for publishing.
 
 Album posts, YouTube posts, and downloaded-video posts cannot be edited from moderation — there is no text message to edit — so they are approved or rejected as a whole. Every other post type is editable as usual.
 
-All external media is host-restricted and SSRF-guarded: images may come only from each source's own CDN, downloads are HTTPS-only with redirects disabled, internal and loopback addresses are refused, and bodies are streamed with a hard size cap instead of being buffered. Untrusted XML feeds are parsed with `defusedxml`. If a media send still fails after retries, the bot logs it and falls back to publishing the text.
+All external media is host-restricted and SSRF-guarded: images may come only from each source's own CDN, downloads are HTTPS-only with redirects disabled, internal and loopback addresses are refused, and bodies are streamed with a hard size cap instead of being buffered. Untrusted XML feeds are parsed with DTDs and entity declarations refused outright, so an entity-expansion bomb is rejected rather than expanded. If a media send still fails after retries, the bot logs it and falls back to publishing the text.
 
 The bot does not keep collector media on disk. It stores Telegram `file_id` values for user-submitted media and external URLs for collected items; downloads happen in memory at send time.
 
 ### Dates and times
 
-Article dates are parsed with `python-dateutil`. If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE` with `zoneinfo`. If a source date includes a time but no timezone, the bot does not assume UTC; it keeps date-only metadata instead. Public posts show visible times only as Kyiv time with `за Києвом` when conversion is reliable. Common `HH:MM UTC/GMT` event schedules from article text are converted to Kyiv time and supplied to Gemini as notes; post-processing also replaces matching raw UTC/GMT times when those notes are available. If conversion is uncertain, the prompt tells Gemini to avoid guessing and omit the time or keep date-only wording.
+Article dates are parsed by a purpose-built parser covering the shapes the sources actually emit (ISO 8601, RFC 2822, and the month-name / slash forms). If the source includes timezone information, the date is converted to `ARTICLE_TIMEZONE` using the IANA timezone database. If a source date includes a time but no timezone, the bot does not assume UTC; it keeps date-only metadata instead. Public posts show visible times only as Kyiv time with `за Києвом` when conversion is reliable. Common `HH:MM UTC/GMT` event schedules from article text are converted to Kyiv time and supplied to Gemini as notes; post-processing also replaces matching raw UTC/GMT times when those notes are available. If conversion is uncertain, the prompt tells Gemini to avoid guessing and omit the time or keep date-only wording.
 
 ## Editing Text And Media
 
@@ -523,7 +524,7 @@ Rivals UA community server. It is **independent** from the Telegram flow and is
 **not** a news source — Discord is used only for moderation/utility because the
 official server does not expose Follow Channel access.
 
-Both bots run in the **same process**: `main.py` starts the Discord bot as a
+Both bots run in the **same process**: `main.js` starts the Discord bot as a
 background asyncio task alongside the existing Telegram long-polling loop. There
 is still only one `asyncio.run()`. If the Discord bot is disabled, misconfigured,
 or fails to log in, it logs a safe message and the Telegram bot keeps running
@@ -531,8 +532,8 @@ normally. Secrets are never logged.
 
 ### Enable it
 
-The Discord module lives in [`discord_moderation.py`](discord_moderation.py) and
-uses `discord.py`. It starts only when `ENABLE_DISCORD_MODERATION=true`. Add to
+The Discord module lives in [`discord_moderation.js`](discord_moderation.js) and
+uses `discord.js`. It starts only when `ENABLE_DISCORD_MODERATION=true`. Add to
 `.env`:
 
 ```env
@@ -582,7 +583,7 @@ equal/higher role, regardless of permissions.
 
 ### Moderation features
 
-- **Anti-spam** — tracks messages per user per channel; more than 5 messages in ~7 seconds deletes the triggering message (when the bot has Manage Messages), applies a 60-second timeout (when it has Moderate Members), and logs the action. Thresholds are constants near the top of `discord_moderation.py`.
+- **Anti-spam** — tracks messages per user per channel; more than 5 messages in ~7 seconds deletes the triggering message (when the bot has Manage Messages), applies a 60-second timeout (when it has Moderate Members), and logs the action. Thresholds are constants near the top of `discord_moderation.js`.
 - **Invite filter** — detects `discord.gg/…`, `discord.com/invite/…`, and `discordapp.com/invite/…` and deletes them unless the code is in `DISCORD_ALLOWED_INVITES`.
 - **Suspicious link filter** — conservative patterns for fake-Nitro, Steam-gift scams, crypto/airdrop spam, phishing look-alike domains, and IP-logger/grabber links; generic URL shorteners are flagged only when paired with a scam keyword.
 - **Bad-word filter** — a deliberately tiny, configurable list kept in an external, easy-to-edit text file, [`discord_badwords.txt`](discord_badwords.txt) (one term per line, `#` comments allowed). It is matched with Unicode-aware word boundaries to avoid overblocking normal Ukrainian/Russian/English words. Add server-specific terms there and restart the bot; if the file is missing the bot falls back to a small built-in default.
@@ -602,7 +603,7 @@ All command descriptions and user-facing replies are in Ukrainian.
 - `/warnings user` — show a member's warning history (requires Moderate Members).
 - `/clearwarnings user` — clear a member's warning history (requires Moderate Members).
 - `/report member reason` — **available to any member**; sends a report to the mod-log channel. The reporter gets an ephemeral confirmation and a light per-user cooldown prevents spam.
-- `/lfthelp` — **available to any member**; shows an ephemeral guide for the looking-for-team forum (how to create a post, tags, post template). Links the forum when `DISCORD_LFT_CHANNEL_ID` is set. The forum itself can be (re)configured with `python scripts/setup_lft_forum.py` (needs Manage Channels + Manage Threads on the forum channel).
+- `/lfthelp` — **available to any member**; shows an ephemeral guide for the looking-for-team forum (how to create a post, tags, post template). Links the forum when `DISCORD_LFT_CHANNEL_ID` is set. The forum itself can be (re)configured with `node scripts/setup_lft_forum.js` (needs Manage Channels + Manage Threads on the forum channel).
 
 Each moderator command re-checks permissions at runtime and reports problems
 privately (ephemeral) instead of failing loudly.
@@ -615,7 +616,7 @@ privately (ephemeral) instead of failing loudly.
 migration step is needed and the Telegram side never touches it.
 
 Auto-actions trigger on the number of active warnings (thresholds are constants
-near the top of `discord_moderation.py`):
+near the top of `discord_moderation.js`):
 
 - 3 warnings → 10-minute timeout
 - 5 warnings → 1-hour timeout
@@ -637,8 +638,8 @@ Members Intent, and it is requested only when the welcome channel is configured.
 
 ### Install and run
 
-`discord.py` is listed in `requirements.txt`, so `pip install -r requirements.txt`
-installs it. Run the project exactly as before with `python main.py` — when
+`discord.js` is listed in `package.json`, so `npm install` installs it. Run the
+project exactly as before with `npm start` — when
 `ENABLE_DISCORD_MODERATION=true` and a valid token is present, the Discord bot
 starts automatically next to the Telegram bot. To run Telegram only, set
 `ENABLE_DISCORD_MODERATION=false` (or leave the token empty).
@@ -651,8 +652,8 @@ the native Telegram API and runs in the **same process** as the news/submission
 flow — there is no second bot and still only one `asyncio.run()`. It is disabled
 by default and never affects the submission/news flows when off.
 
-The moderation logic lives in [`handlers/moderation.py`](handlers/moderation.py)
-(Telegram I/O) and [`services/chat_moderation.py`](services/chat_moderation.py)
+The moderation logic lives in [`handlers/moderation.js`](handlers/moderation.js)
+(Telegram I/O) and [`services/chat_moderation.js`](services/chat_moderation.js)
 (pure rules), and warnings are stored in the project's SQLite file in a dedicated
 `telegram_warnings` table the rest of the bot never touches.
 
@@ -695,7 +696,7 @@ TELEGRAM_WELCOME_DELETE_SECONDS=60
 
 - **Anti-flood** — more than 5 messages from the same user in ~7 seconds deletes
   the triggering message and applies a short temporary mute (constants near the top
-  of `services/chat_moderation.py`). Stickers/media count toward the flood limit too.
+  of `services/chat_moderation.js`). Stickers/media count toward the flood limit too.
 - **Telegram invite/link filter** — deletes `t.me/…`, `t.me/+…`, and
   `t.me/joinchat/…` links to other chats unless the code is in
   `TELEGRAM_LINK_ALLOWLIST`. Well-known non-invite paths (sticker packs, share
@@ -785,7 +786,7 @@ previously stored menu.
 
 ### Install and run
 
-aiogram already powers the bot, so no new dependency is needed — run `python main.py`
+grammY already powers the bot, so no new dependency is needed — run `npm start`
 as before. When `ENABLE_TELEGRAM_MODERATION=true` and at least one chat ID is set,
 the moderation router is registered alongside the existing routers; otherwise the
 bot behaves exactly as before.
