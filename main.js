@@ -285,7 +285,13 @@ async function main() {
       logger.critical(`Configuration error: ${error.message}`);
       process.exit(1);
     }
-    throw error;
+    // Anything else that reaches here happened during startup — a database the
+    // container cannot write being the one that has actually bitten. Log it in
+    // the usual format and exit non-zero so the container restarts and the
+    // deploy's settle check fails, instead of serving a half-working bot.
+    logger.critical(`Startup failed: ${error.message}`);
+    logger.exception("Startup failure details", error);
+    process.exit(1);
   }
 }
 

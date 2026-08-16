@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 
 import { collapseWhitespace, strip, utcIsoSeconds, utcNowIso } from "./services/pyutils.js";
@@ -7,6 +8,53 @@ import { collapseWhitespace, strip, utcIsoSeconds, utcNowIso } from "./services/
 export const STATUS_PENDING = "pending";
 export const STATUS_PUBLISHED = "published";
 export const STATUS_REJECTED = "rejected";
+
+/**
+ * How long a statement waits for a lock another connection is holding.
+ *
+ * This MUST be set explicitly: `node:sqlite` defaults to zero and fails a busy
+ * write immediately with "database is locked", whereas Python's `sqlite3` — what
+ * this file was ported from — defaults to five seconds. Several things touch the
+ * database at once (the five-minute collector tick, the weekly rubrics, an admin
+ * command, the nightly backup), so without a wait the loser of any overlap just
+ * errors out. `/cleanup` hit it first because VACUUM needs the whole file to
+ * itself, but every write was exposed.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
+function openConnection(dbPath) {
+  const db = new DatabaseSync(dbPath);
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  return db;
+}
+
+/**
+ * Fail startup loudly when the database file cannot be written.
+ *
+ * A container that can read but not write the volume (a uid mismatch after an
+ * image change is the way this happens) starts perfectly happily: every
+ * `CREATE TABLE IF NOT EXISTS` above is a no-op on an existing schema and needs
+ * no write at all. The bot then polls, answers commands, reports collector
+ * stats — and silently loses every submission, because only the writes fail.
+ *
+ * Writing `user_version` back to the value it already holds is a real write
+ * that changes nothing, so it surfaces the problem here instead of hours later
+ * in a user's DM. Throwing aborts startup, which turns a silent outage into a
+ * failed deploy.
+ */
+function assertWritable(db, dbPath) {
+  const current = Number(db.prepare("PRAGMA user_version").get().user_version ?? 0);
+  try {
+    db.exec(`PRAGMA user_version = ${current}`);
+  } catch (error) {
+    throw new Error(
+      `The database at ${dbPath} is not writable by this process (uid ${process.getuid?.() ?? "?"}): ` +
+        `${error.message}. On the server this usually means the data volume is owned by a different ` +
+        "uid than the container user - check the Dockerfile's USER against the volume's ownership.",
+      { cause: error },
+    );
+  }
+}
 
 /**
  * SQLite persistence for submissions, their parts, tags, the seen-source memory
@@ -30,7 +78,7 @@ export class Database {
       fs.mkdirSync(parent, { recursive: true });
     }
 
-    const db = new DatabaseSync(this.path);
+    const db = openConnection(this.path);
     try {
       db.exec(`
         CREATE TABLE IF NOT EXISTS submissions (
@@ -142,6 +190,7 @@ export class Database {
         CREATE INDEX IF NOT EXISTS idx_telegram_warnings_chat_user
         ON telegram_warnings (chat_id, user_id)
       `);
+      assertWritable(db, this.path);
     } finally {
       db.close();
     }
@@ -893,7 +942,7 @@ export class Database {
   }
 
   #connect(work) {
-    const db = new DatabaseSync(this.path);
+    const db = openConnection(this.path);
     try {
       return work(db);
     } finally {
