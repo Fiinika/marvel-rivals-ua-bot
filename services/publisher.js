@@ -4,7 +4,7 @@ import { InputFile } from "grammy";
 
 import { getLogger } from "./logger.js";
 import { formatPostHtml, submissionAllowsSourceLink } from "./post_footer.js";
-import { errorText, htmlUnescape, isDigits } from "./pyutils.js";
+import { charLength, errorText, htmlUnescape, isDigits, rfindChars, sliceChars } from "./pyutils.js";
 import { isTelegramBadRequest, isTelegramSendFailure, telegramErrorText } from "./telegram_errors.js";
 import { delayBetweenTelegramSends, sendWithRetries } from "./telegram_retry.js";
 import { urlsplit } from "./urlutils.js";
@@ -719,20 +719,20 @@ async function sendMediaWithOptionalText(
 }
 
 export function splitText(text, limit) {
-  if (text.length <= limit) {
+  if (charLength(text) <= limit) {
     return [text];
   }
 
   const chunks = [];
   let remaining = text;
-  while (remaining.length > limit) {
+  while (charLength(remaining) > limit) {
     // Python's `rfind(x, 0, limit)` searches indices < limit.
-    let splitAt = remaining.lastIndexOf("\n", limit - 1);
+    let splitAt = rfindChars(remaining, "\n", limit);
     if (splitAt < Math.floor(limit / 2)) {
       splitAt = limit;
     }
-    chunks.push(remaining.slice(0, splitAt).trim());
-    remaining = remaining.slice(splitAt).trim();
+    chunks.push(sliceChars(remaining, 0, splitAt).trim());
+    remaining = sliceChars(remaining, splitAt).trim();
   }
 
   if (remaining) {
@@ -744,9 +744,9 @@ export function splitText(text, limit) {
 
 export function telegramVisibleLength(text, parseMode) {
   if (parseMode !== "HTML") {
-    return text.length;
+    return charLength(text);
   }
 
   const withoutTags = text.replace(/<[^>]+>/g, "");
-  return htmlUnescape(withoutTags).length;
+  return charLength(htmlUnescape(withoutTags));
 }

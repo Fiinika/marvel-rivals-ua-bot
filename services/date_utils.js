@@ -488,6 +488,14 @@ function extractTimeParts(value) {
 }
 
 function extractOffsetMinutes(value) {
+  // "GMT+2" means UTC+02:00 here, i.e. what a news page means by it.
+  //
+  // This is a DELIBERATE divergence from the Python original, which used
+  // dateutil: dateutil follows the POSIX TZ convention and reads "GMT+2" as
+  // UTC-02:00, so an article stamped "18:30 GMT+2" was published four hours off.
+  // The Python code was also inconsistent with itself — buildUtcTimeConversionNotes
+  // below reads the very same suffix the non-inverted way. Do not "restore" the
+  // dateutil behaviour to match the old implementation; it was the bug.
   const explicit = /(?:UTC|GMT)\s*([+-])\s*(\d{1,2})(?::?([0-5]\d))?/i.exec(value);
   if (explicit) {
     const sign = explicit[1] === "-" ? -1 : 1;

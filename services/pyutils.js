@@ -110,6 +110,45 @@ export function collapseWhitespace(value) {
   return splitWhitespace(value).join(" ");
 }
 
+/**
+ * Python `str` as a list of characters, i.e. of code POINTS.
+ *
+ * Every length limit in this codebase was written against Python's `len()`,
+ * which counts code points. JavaScript's `String.prototype.length` counts UTF-16
+ * code units instead, so an emoji counts twice — and, far worse, slicing at a
+ * code-unit index can cut a surrogate pair in half. The resulting lone surrogate
+ * is not a character: it reaches Telegram as a replacement glyph. Titles from
+ * Bluesky/Reddit/YouTube and drafts that open with an emoji hit this routinely,
+ * so every character-counted limit goes through the three helpers below.
+ */
+export function chars(value) {
+  return Array.from(String(value ?? ""));
+}
+
+/** Python `len(str)` - a count of code points, not of UTF-16 code units. */
+export function charLength(value) {
+  return chars(value).length;
+}
+
+/** Python `str[start:end]` - slicing by code point, never mid-surrogate-pair. */
+export function sliceChars(value, start, end) {
+  return chars(value).slice(start, end).join("");
+}
+
+/** Python `str.rfind(sub, 0, end)` - the last index BELOW `end`, in code points. */
+export function rfindChars(value, sub, end) {
+  const haystack = chars(value);
+  const needle = chars(sub);
+  const limit = end === undefined ? haystack.length : Math.min(end, haystack.length);
+  outer: for (let start = limit - needle.length; start >= 0; start -= 1) {
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[start + offset] !== needle[offset]) continue outer;
+    }
+    return start;
+  }
+  return -1;
+}
+
 /** Python `str.rsplit(sep, 1)`. Returns `[head, tail]`, or `[text]` when absent. */
 export function rsplitOnce(value, separator) {
   const text = String(value ?? "");

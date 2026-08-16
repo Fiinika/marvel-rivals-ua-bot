@@ -1,5 +1,5 @@
 import { t } from "../../i18n.js";
-import { rsplitOnce } from "../../pyutils.js";
+import { charLength, rsplitOnce, sliceChars } from "../../pyutils.js";
 import { collectorDefinition, draftCandidate, listingEntry } from "../base.js";
 import { BaseNewsCollector } from "../runner.js";
 import { BlueskyFeedFetcher } from "./feed_fetcher.js";
@@ -92,11 +92,11 @@ function deriveTitle(text) {
     return FALLBACK_TITLE;
   }
 
-  if (firstLine.length <= TITLE_MAX_LENGTH) {
+  if (charLength(firstLine) <= TITLE_MAX_LENGTH) {
     return firstLine;
   }
 
-  const head = firstLine.slice(0, TITLE_MAX_LENGTH);
+  const head = sliceChars(firstLine, 0, TITLE_MAX_LENGTH);
   const parts = rsplitOnce(head, " ");
   const truncated = (parts.length === 2 ? parts[0] : parts[0]).trim();
   return `${truncated || head.trim()}…`;

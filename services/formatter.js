@@ -1,6 +1,6 @@
 import { t, tOptional } from "./i18n.js";
 import { formatPostHtml } from "./post_footer.js";
-import { htmlEscape, pyTitle, rstrip } from "./pyutils.js";
+import { charLength, htmlEscape, pyTitle, rstrip, sliceChars } from "./pyutils.js";
 
 export const MAX_PREVIEW_TEXT_LENGTH = 1200;
 export const MAX_SOURCE_DRAFT_PREVIEW_LENGTH = 800;
@@ -184,8 +184,8 @@ function detectSourceCategory(tags) {
 }
 
 function truncate(value, maxLength) {
-  if (value.length <= maxLength) {
+  if (charLength(value) <= maxLength) {
     return value;
   }
-  return `${rstrip(value.slice(0, maxLength - 1))}…`;
+  return `${rstrip(sliceChars(value, 0, maxLength - 1))}…`;
 }

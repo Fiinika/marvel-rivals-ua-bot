@@ -4,11 +4,14 @@ import path from "node:path";
 import { t } from "./i18n.js";
 import { getLogger } from "./logger.js";
 import {
+  charLength,
   errorText,
   escapeRegExp,
   formatTemplate,
   partition,
+  rfindChars,
   rstrip,
+  sliceChars,
   sleep,
   strip,
   WORD,
@@ -797,7 +800,7 @@ function collapsePostParts(draft) {
 
 function enforceOfficialLength(text, draftInput, { maxLength }) {
   let result = normalizeBlankLines(text);
-  if (result.length <= maxLength) {
+  if (charLength(result) <= maxLength) {
     return result;
   }
 
@@ -807,18 +810,18 @@ function enforceOfficialLength(text, draftInput, { maxLength }) {
   body = removeExactLine(body, sourceLine).trim();
 
   const suffix = [sourceLine, hashtags].filter(Boolean).join("\n\n");
-  let available = Math.max(260, maxLength - suffix.length - 4);
+  let available = Math.max(260, maxLength - charLength(suffix) - 4);
   let shortened = truncatePlainText(body, available).trim();
   if (sourceLine && !shortened.includes(sourceLine)) {
     shortened = `${shortened}\n\n${sourceLine}`.trim();
   }
 
   result = `${shortened}\n\n${hashtags}`.trim();
-  if (result.length <= maxLength) {
+  if (charLength(result) <= maxLength) {
     return normalizeBlankLines(result);
   }
 
-  available = Math.max(180, maxLength - hashtags.length - 4);
+  available = Math.max(180, maxLength - charLength(hashtags) - 4);
   shortened = truncatePlainText(shortened, available);
   return normalizeBlankLines(`${shortened}\n\n${hashtags}`);
 }
@@ -876,25 +879,25 @@ function removeExactLine(text, lineToRemove) {
 }
 
 function truncatePlainText(text, maxLength) {
-  if (text.length <= maxLength) {
+  if (charLength(text) <= maxLength) {
     return text;
   }
 
   const ending = "…\n\nПовні деталі — на офіційному сайті.";
-  const available = Math.max(80, maxLength - ending.length);
-  let truncated = rstrip(text.slice(0, available));
+  const available = Math.max(80, maxLength - charLength(ending));
+  let truncated = rstrip(sliceChars(text, 0, available));
   let splitAt = Math.max(
-    truncated.lastIndexOf("\n\n"),
-    truncated.lastIndexOf(". "),
-    truncated.lastIndexOf("! "),
-    truncated.lastIndexOf("? "),
+    rfindChars(truncated, "\n\n"),
+    rfindChars(truncated, ". "),
+    rfindChars(truncated, "! "),
+    rfindChars(truncated, "? "),
   );
   if (splitAt > Math.floor(available / 2)) {
-    truncated = rstrip(truncated.slice(0, splitAt + 1));
+    truncated = rstrip(sliceChars(truncated, 0, splitAt + 1));
   } else {
-    splitAt = truncated.lastIndexOf(" ");
+    splitAt = rfindChars(truncated, " ");
     if (splitAt > Math.floor(available / 2)) {
-      truncated = rstrip(truncated.slice(0, splitAt));
+      truncated = rstrip(sliceChars(truncated, 0, splitAt));
     }
   }
 
@@ -950,7 +953,7 @@ function splitDraftParts(draft, { maxPartLength }) {
 }
 
 function splitOversizedPart(part, { maxPartLength }) {
-  if (part.length <= maxPartLength) {
+  if (charLength(part) <= maxPartLength) {
     return [part];
   }
 
@@ -966,7 +969,7 @@ function splitOversizedPart(part, { maxPartLength }) {
   let current = "";
   for (const paragraph of paragraphs) {
     const candidate = current ? `${current}\n\n${paragraph}`.trim() : paragraph;
-    if (candidate.length <= maxPartLength) {
+    if (charLength(candidate) <= maxPartLength) {
       current = candidate;
       continue;
     }
@@ -976,19 +979,17 @@ function splitOversizedPart(part, { maxPartLength }) {
     }
     current = paragraph;
 
-    while (current.length > maxPartLength) {
-      // `lastIndexOf(x, n)` searches indices <= n, while Python's
-      // `rfind(x, 0, n)` searches indices < n — hence the -1.
-      let splitAt = current.lastIndexOf("\n", maxPartLength - 1);
+    while (charLength(current) > maxPartLength) {
+      let splitAt = rfindChars(current, "\n", maxPartLength);
       if (splitAt < Math.floor(maxPartLength / 2)) {
-        splitAt = current.lastIndexOf(" ", maxPartLength - 1);
+        splitAt = rfindChars(current, " ", maxPartLength);
       }
       if (splitAt < Math.floor(maxPartLength / 2)) {
         splitAt = maxPartLength;
       }
 
-      chunks.push(current.slice(0, splitAt).trim());
-      current = current.slice(splitAt).trim();
+      chunks.push(sliceChars(current, 0, splitAt).trim());
+      current = sliceChars(current, splitAt).trim();
     }
   }
 
@@ -1021,7 +1022,10 @@ function loadCachedText(file, { trim = true, fallback = null } = {}) {
   }
   let value;
   try {
-    const raw = fs.readFileSync(file, "utf8");
+    // Python read these in text mode, which normalises line endings. Node does
+    // not, so on a CRLF checkout every prompt sent to Gemini would silently
+    // differ from the one this repo was tuned against.
+    const raw = fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n");
     value = trim ? raw.trim() : raw;
   } catch (error) {
     if (fallback === null) {

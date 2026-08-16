@@ -52,7 +52,15 @@ import { DateTime } from "luxon";
 
 import { createTask } from "./services/background.js";
 import { getLogger } from "./services/logger.js";
-import { errorText, escapeRegExp, fromIsoFormat, hasIsoOffset, sortedNumbers, WORD } from "./services/pyutils.js";
+import {
+  errorText,
+  escapeRegExp,
+  fromIsoFormat,
+  hasIsoOffset,
+  sliceChars,
+  sortedNumbers,
+  WORD,
+} from "./services/pyutils.js";
 
 const logger = getLogger("discord_moderation");
 
@@ -522,7 +530,7 @@ class ModerationBot {
       .setColor(0x5865f2); // blurple
     if (WELCOME_RULES.length) {
       const rulesText = WELCOME_RULES.map((rule, index) => `${index + 1}. ${rule}`).join("\n");
-      embed.addFields({ name: "📜 Правила", value: rulesText.slice(0, 1024), inline: false });
+      embed.addFields({ name: "📜 Правила", value: sliceChars(rulesText, 0, 1024), inline: false });
     }
     const links = this.welcomeChannelLinks();
     if (links) {
@@ -780,9 +788,9 @@ class ModerationBot {
       value: channel ? (channel.toString?.() ?? String(channel)) : "—",
       inline: true,
     });
-    embed.addFields({ name: "Reason", value: (reason || "—").slice(0, 1024), inline: true });
+    embed.addFields({ name: "Reason", value: sliceChars(reason || "—", 0, 1024), inline: true });
     if (preview) {
-      const safe = escapeMarkdown(preview).slice(0, 200);
+      const safe = sliceChars(escapeMarkdown(preview), 0, 200);
       if (safe) {
         embed.addFields({ name: "Message preview", value: safe, inline: false });
       }
@@ -803,7 +811,7 @@ class ModerationBot {
       value: channel ? (channel.toString?.() ?? String(channel)) : "—",
       inline: true,
     });
-    embed.addFields({ name: "Reason", value: (reason || "—").slice(0, 1024), inline: false });
+    embed.addFields({ name: "Reason", value: sliceChars(reason || "—", 0, 1024), inline: false });
     await this.sendLogEmbed(embed);
   }
 
@@ -1349,7 +1357,7 @@ async function warningsCommand(bot, interaction) {
     const position = records.length - recent.length + 1 + offset;
     const when = formatWarnTimestamp(record.created_at);
     const moderator = `<@${record.moderator_id}>`;
-    const reasonText = (record.reason || "—").slice(0, 300);
+    const reasonText = sliceChars(record.reason || "—", 0, 300);
     embed.addFields({
       name: `#${position} • ${when}`,
       value: `Модератор: ${moderator}\nПричина: ${reasonText}`,

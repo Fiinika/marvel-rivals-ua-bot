@@ -42,7 +42,15 @@ import {
 import { t } from "../services/i18n.js";
 import { getLogger } from "../services/logger.js";
 import { DISABLED_LINK_PREVIEW } from "../services/publisher.js";
-import { errorText, fromIsoFormat, hasIsoOffset, htmlEscape, sortedNumbers, splitWhitespace } from "../services/pyutils.js";
+import {
+  errorText,
+  fromIsoFormat,
+  hasIsoOffset,
+  htmlEscape,
+  sliceChars,
+  sortedNumbers,
+  splitWhitespace,
+} from "../services/pyutils.js";
 import {
   isTelegramApiError,
   isTelegramBadRequest,
@@ -1160,7 +1168,7 @@ async function sendModLog(bot, config, { action, targetHtml, moderatorHtml, reas
     reason: reason ? htmlEscape(reason) : t("moderation.reason.none"),
   });
   if (preview) {
-    const safe = htmlEscape(preview).slice(0, 200);
+    const safe = sliceChars(htmlEscape(preview), 0, 200);
     if (safe.trim()) {
       text += `\n${t("moderation.log.preview", { preview: safe })}`;
     }
@@ -1189,7 +1197,7 @@ async function sendReportLog(
     reason: htmlEscape(reason),
   });
   if (preview) {
-    const safe = htmlEscape(preview).slice(0, 200);
+    const safe = sliceChars(htmlEscape(preview), 0, 200);
     if (safe.trim()) {
       text += `\n${t("moderation.log.preview", { preview: safe })}`;
     }

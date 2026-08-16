@@ -2,7 +2,7 @@ import { parseArticleDate } from "../../date_utils.js";
 import { getText, loadHtml, selectOne } from "../../html.js";
 import { getLogger } from "../../logger.js";
 import { extractArticleMedia } from "../../media_parser.js";
-import { collapseWhitespace, rsplitOnce } from "../../pyutils.js";
+import { charLength, collapseWhitespace, rsplitOnce, sliceChars } from "../../pyutils.js";
 import { urldefrag, urljoin, urlsplit } from "../../urlutils.js";
 import { fetchHtml } from "./news_fetcher.js";
 
@@ -263,11 +263,11 @@ function cleanText(value) {
 }
 
 function truncateText(value, maxLength) {
-  if (value.length <= maxLength) {
+  if (charLength(value) <= maxLength) {
     return value;
   }
 
-  const head = value.slice(0, maxLength);
+  const head = sliceChars(value, 0, maxLength);
   const parts = rsplitOnce(head, "\n");
   const truncated = (parts.length === 2 ? parts[0] : parts[0]).trim();
   return truncated || head.trim();

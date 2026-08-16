@@ -1,5 +1,5 @@
 import { t } from "../../i18n.js";
-import { rsplitOnce } from "../../pyutils.js";
+import { charLength, rsplitOnce, sliceChars } from "../../pyutils.js";
 import { collectorDefinition, draftCandidate, listingEntry } from "../base.js";
 import { BaseNewsCollector } from "../runner.js";
 import { RivalSkinsFeedFetcher } from "./feed_fetcher.js";
@@ -65,11 +65,11 @@ function deriveTitle(title) {
     return FALLBACK_TITLE;
   }
 
-  if (stripped.length <= TITLE_MAX_LENGTH) {
+  if (charLength(stripped) <= TITLE_MAX_LENGTH) {
     return stripped;
   }
 
-  const head = stripped.slice(0, TITLE_MAX_LENGTH);
+  const head = sliceChars(stripped, 0, TITLE_MAX_LENGTH);
   const parts = rsplitOnce(head, " ");
   const truncated = (parts.length === 2 ? parts[0] : parts[0]).trim();
   return `${truncated || head.trim()}…`;

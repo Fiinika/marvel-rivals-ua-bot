@@ -28,7 +28,7 @@
 import vm from "node:vm";
 
 import { getLogger } from "./logger.js";
-import { errorText, WORD } from "./pyutils.js";
+import { errorText, sliceChars, WORD } from "./pyutils.js";
 import { urlsplit } from "./urlutils.js";
 
 const logger = getLogger("services.youtube_video");
@@ -241,7 +241,7 @@ function safeFilename(title) {
   const cleaned = String(title)
     .replace(new RegExp(`[^${WORD.slice(1, -1)}\\-]+`, "gu"), "_")
     .replace(/^_+|_+$/g, "");
-  return (cleaned || "video").slice(0, 60);
+  return sliceChars(cleaned || "video", 0, 60);
 }
 
 // Exported for the unit tests, which check the sanitiser keeps Unicode letters
