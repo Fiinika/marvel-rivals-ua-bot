@@ -11,7 +11,7 @@ Telegram bot for a Ukrainian Marvel Rivals community. It gathers content from si
 - YouTube, the official channel — trailers and reveals, published with a playable video
 - Reddit leaks (`r/MarvelRivalsLeaks`) — datamines, explicitly framed as rumours
 - rivalskins.com — upcoming skin renders, also framed as rumours
-- the Marvel Rivals Fandom wiki — hero trivia for the weekly "Чи знали ви?" rubric
+- the Marvel Rivals Fandom wiki — trivia from hero, map, location, NPC, cast, event and game-mode pages for the weekly "Чи знали ви?" rubric
 
 Every source except the official site is opt-in and off by default.
 
@@ -43,7 +43,7 @@ Every source except the official site is opt-in and off by default.
 Publication stays fully manual by design — the bot never posts without an admin pressing Approve. Beyond that, it does not implement:
 
 - webhook mode (Telegram long polling only)
-- role management inside Telegram (admin access comes only from `ADMIN_USER_IDS`)
+- role management inside Telegram (the news/submission queue is `ADMIN_USER_IDS`-only; a moderated group chat's own Telegram admins are treated as moderators there)
 - video parsing for the official news site (that source is photo-only; Bluesky and YouTube do carry video)
 
 Each source is a `BaseNewsCollector` subclass registered in `services/collectors/registry.js`, so a new one reuses the whole moderation, dedup, and publishing flow.
@@ -71,7 +71,8 @@ services/
     youtube/                 feed_fetcher.js (channel Atom feed), collector.js
     reddit/                  feed_fetcher.js (flair search.rss), collector.js
     rivalskins/              feed_fetcher.js (WordPress RSS), collector.js
-    wiki_facts/              client.js (Fandom api.php), collector.js + weekly scheduler
+    wiki_facts/              client.js (Fandom api.php), collector.js + weekly scheduler,
+                             quality.js (which bullets may be published, and in what order)
   digests/
     fanart.js                weekly fan-art album digest
   background.js              cancellable scheduler tasks (the asyncio.Task analogue)
@@ -87,7 +88,8 @@ services/
   moderation.js              sending a submission into the moderation chat
   post_footer.js             community footer and source attribution
   publisher.js               publishing: text, photo, album, native video
-  pyutils.js                 Python-semantics shims (strip, format, ISO timestamps)
+  pyutils.js                 Python-semantics shims (strip, format, ISO timestamps, code-point slicing)
+  source_links.js            allowlisted links kept from the original post text
   telegram_errors.js         grammY error classification
   telegram_html.js           re-render a message as HTML (the aiogram html_text analogue)
   telegram_retry.js          retries, timeouts, inter-message spacing
@@ -99,6 +101,7 @@ prompts/
   gemini_shortform_uk.md     concise social/leak posts
   gemini_wiki_fact_uk.md     "Чи знали ви?" trivia
   gemini_dedup_uk.md         cross-source duplicate-title judge
+  gemini_wiki_pick_uk.md     picks the best fact out of the wiki-trivia shortlist
   official_news_style.md     editable style guide injected into the news prompt
 locales/
   uk.json                    every user-visible string
@@ -209,7 +212,7 @@ ADMIN_USER_IDS=111111111,222222222,333333333
 Use Node.js 24 or newer (the database layer uses the built-in `node:sqlite` module).
 
 ```bash
-cd marvel-rivals-ua-submission-bot
+cd marvel-rivals-ua-bot
 npm install
 ```
 
@@ -241,7 +244,7 @@ MIN_SUBMISSION_TEXT_CHARS=10
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.6-flash
 OFFICIAL_NEWS_URL=https://www.marvelrivals.com/news/
-NEWS_CHECK_INTERVAL_MINUTES=30
+NEWS_CHECK_INTERVAL_MINUTES=5
 ARTICLE_TIMEZONE=Europe/Kyiv
 ```
 
@@ -408,7 +411,7 @@ Two more admin commands trigger the weekly rubrics on demand:
 /wikifact             queue one "Чи знали ви?" fact
 ```
 
-A fourth command prunes the database:
+A fifth command prunes the database:
 
 ```text
 /cleanup              report how many finished submissions are older than 30 days
@@ -440,7 +443,7 @@ Sources in a tick run one after another rather than in parallel, so each one's d
 
 ### Prompts and text
 
-The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official articles (plus the editable style guide in `prompts/official_news_style.md`), `prompts/gemini_shortform_uk.md` for social and leak posts, and `prompts/gemini_wiki_fact_uk.md` for trivia. A fourth prompt, `prompts/gemini_dedup_uk.md`, backs the cross-source duplicate check rather than any single source. Update the style guide to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing code. All three drafting prompts also carry the same proper-noun rules, so the channel reads consistently: hero names in Ukrainian (an established equivalent where one exists, otherwise transliterated), while skin, map, mode, event, and comic titles stay in the original — those are what players search for. Feed titles and bodies are passed to Gemini as untrusted data with an explicit instruction not to obey anything embedded in them. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
+The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official articles (plus the editable style guide in `prompts/official_news_style.md`), `prompts/gemini_shortform_uk.md` for social and leak posts, and `prompts/gemini_wiki_fact_uk.md` for trivia. Two further prompts back no single source's draft: `prompts/gemini_dedup_uk.md` for the cross-source duplicate check, and `prompts/gemini_wiki_pick_uk.md`, which picks the best fact out of the wiki-trivia shortlist. Update the style guide to tune tone, templates, length limits, source URL rules, tag rules, and Kyiv-time wording without changing code. All three drafting prompts also carry the same proper-noun rules, so the channel reads consistently: hero names in Ukrainian (an established equivalent where one exists, otherwise transliterated), while skin, map, mode, event, and comic titles stay in the original — those are what players search for. Feed titles and bodies are passed to Gemini as untrusted data with an explicit instruction not to obey anything embedded in them. User-visible UI text, reports, date labels, footer labels, and collector button labels live in `locales/uk.json`.
 
 ### The weekly rubrics
 
@@ -448,7 +451,7 @@ The **fan-art digest** pulls the top `FANART_FLAIR` posts of the past week from 
 
 The **"Чи знали ви?" rubric** reads the cleaned bullet points of the Trivia sections across `Category:Heroes`, `Maps`, `Locations`, `NPCs`, `Cast`, `Events` and `Game Modes` on the Marvel Rivals Fandom wiki, and shuffles the combined page list. Heroes alone made the rubric lopsided — a hero page's Trivia is mostly comic-book biography — so the game-side categories are what supply facts about the game itself: map easter eggs, voice actors, event details. A category that fails to load is skipped rather than failing the run. It samples several heroes per run, drops the bullets that cannot stand on their own as a post (a nested sub-item, a `…:` list header, an opener like "This song…" whose subject is in the bullet above), and ranks the rest — cast, easter eggs, in-game flavour and lore first, the formulaic "first appeared in … (1975) #1" debut line last. Gemini picks the best of the resulting shortlist, then translates it to Ukrainian and credits `Marvel Rivals Wiki (CC BY-SA)` with a link to the hero page. A hero with fewer facts already published is preferred, so the rubric spreads across the roster instead of mining one page. The roster walk continues past a fully-seen hero, so the rubric cannot silently starve. Facts are deduplicated by a hash of the fact text, so re-worded whitespace or casing does not re-post one.
 
-Official AI posts are styled as Telegram gaming-community updates, not article summaries. The prompt asks for a short headline, 1-3 compact blocks, relevant emoji markers, natural Ukrainian, no greetings, no clickbait, no raw Markdown, no public metadata, and no copied patch-note wall. Post-processing sanitizes Markdown artifacts such as `**bold**`, `*` bullets, raw headings, excessive asterisks, duplicated blank lines, misplaced hashtags, raw source URLs, and public `Дата публікації` / `Джерело` lines before moderation. The code detects broad article types from title/body keywords and passes the matching style context to Gemini: shop/skins/bundles, event/rewards/login bonus, patch notes/game update, trailer/teaser/map reveal, vote/community choice, or short announcement. Normal posts target 400-900 characters and are capped at 1200; large patch notes are capped at 1600 and should use 3-5 grouped highlights.
+Official AI posts are styled as Telegram gaming-community updates, not article summaries. The prompt asks for a short headline, 1-3 compact blocks, relevant emoji markers, natural Ukrainian, no greetings, no clickbait, no raw Markdown, no public metadata, and no copied patch-note wall. Post-processing sanitizes Markdown artifacts such as `**bold**`, `*` bullets, raw headings, excessive asterisks, duplicated blank lines, misplaced hashtags, raw source URLs, and public `Дата публікації` / `Джерело` lines before moderation. The code detects broad article types from title/body keywords and passes the matching style context to Gemini: shop/skins/bundles, event/rewards/login bonus, patch notes/game update, trailer/teaser/map reveal, vote/community choice, or short announcement. Normal posts target 400-900 characters and are capped at 1200; large patch notes are capped at 1600.
 
 The admin moderation preview keeps metadata separate from the publishable draft. For official news it shows the submission ID, source, article title, detected category, Kyiv article date when available, source URL, truncated draft preview, tags, status, and the normal approve/edit/reject buttons. It does not dump the full parsed article body into Telegram; full `original_text` remains stored in the database for context.
 
@@ -457,20 +460,20 @@ The community navigation footer is always added to every published post — offi
 ```text
 #MarvelRivalsUA #Офіційно #Анонс
 
----
+────────────────
 Навігація по ком’юніті 👇
 💬 Чат | 🤖 Запропонувати новину | 🎧 Discord
 ```
 
-Footer labels and URLs both live in `locales/uk.json` under `post_footer.links` (`chat`, `submission`, `discord`), each with a `label` and a `url`. If a `url` is set, that item is rendered as a safe Telegram HTML link; if a `url` is empty or invalid, the item stays plain text. The bot validates that footer URLs use `http` or `https` before rendering links. Admins can still edit the visible footer text while editing the draft before approval.
+Footer labels and URLs both live in `locales/uk.json` under `post_footer.links` (`chat`, `submission`, `discord`), each with a `label` and a `url`. If a `url` is set, that item is rendered as a safe Telegram HTML link; if a `url` is empty or invalid, the item stays plain text. The bot validates that footer URLs use `http` or `https` before rendering links. The footer is re-appended on every render, so do **not** edit or delete it inside a draft part: the saved text keeps the footer you see, and the next render appends another one. Editing the same part twice stacks a third. Change the labels and URLs in `locales/uk.json` instead.
 
-Published, moderated, and edited text messages are sent with Telegram link previews disabled, which keeps hidden footer links and body links from creating large embedded preview cards. YouTube posts are the one exception: they deliberately enable a large preview of the video URL, so a post whose video could not be downloaded is still playable in place. Telegram sends use a 30 second request timeout and retry retryable network failures, flood-wait responses, `TimeoutError`, and `aiohttp.ClientOSError` up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
+Published, moderated, and edited text messages are sent with Telegram link previews disabled, which keeps hidden footer links and body links from creating large embedded preview cards. YouTube posts are the one exception: they deliberately enable a large preview of the video URL, so a post whose video could not be downloaded is still playable in place. Telegram sends use a 30 second request timeout and retry grammY `HttpError` network failures, request timeouts and aborts (`TimeoutError`, `AbortError`, `ETIMEDOUT`, `ECONNRESET`), and flood-wait `429` responses up to three times with exponential backoff. A short delay is added between multi-message sends to reduce flood risk.
 
 ### Duplicate detection
 
 Two independent layers keep the same story from arriving twice.
 
-Per-source deduplication uses the `seen_sources` table, where each source has its own `source_type` and its own natural key: the canonical article URL for the official site, the `at://` post URI for Bluesky, a normalised title scoped to the publish day for YouTube (the channel re-uploads the same trailer under different IDs), the `t3_` post id for Reddit, the feed GUID for RivalSkins, a hash of the fact for wiki trivia, and the ISO week for the fan-art digest. An item is marked seen only after Gemini creates a draft **and** the moderation preview is sent successfully. If Gemini fails, the moderation send fails, or the bot crashes first, the item stays unseen and can be picked up again.
+Per-source deduplication uses the `seen_sources` table, where each source has its own `source_type` and its own natural key: the canonical article URL for the official site, the `at://` post URI for Bluesky, a normalised title scoped to the publish day for YouTube (the channel re-uploads the same trailer under different IDs), the `t3_` post id for Reddit, the feed GUID for RivalSkins, a hash of the fact for wiki trivia, and the ISO week for the fan-art digest. An item is marked seen either when it is dropped as a cross-source duplicate (so the same story is not re-fetched and re-judged every tick), or after Gemini creates a draft **and** the moderation preview is sent successfully. If Gemini fails, the moderation send fails, or the bot crashes first, the item stays unseen and can be picked up again.
 
 Cross-source deduplication then catches the same story arriving through two different feeds. Before queueing, Gemini compares the candidate's title against recent titles from *other* sources and drops a duplicate. Two sources opt out of being suppressed: the official site, so its full article is never dropped in favour of a shorter social post, and the trivia rubric, since a fact is not a news story. Both still contribute their titles for other sources to compare against. The check fails open — any error keeps the item.
 
@@ -490,7 +493,7 @@ The official site is photo-only: the parser prefers Open Graph images, Twitter c
 The other sources go further:
 
 - **Albums.** A single-part draft with two or more photos — a Bluesky post with several infographics, or the fan-art digest — becomes one Telegram media group. Album images are downloaded and re-uploaded as bytes rather than sent by URL, because Telegram refuses by-URL photos above roughly 5 MB while a bytes upload allows 10 MB. Images are capped at 10 MiB and must be JPEG, PNG, or WebP. A media group is atomic, so if Telegram rejects one item the publisher drops that image and retries with the rest.
-- **Native video.** YouTube videos are downloaded through YouTube's own InnerTube API with `youtubei.js` (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text with a link preview.
+- **Native video.** YouTube videos are downloaded through YouTube's own InnerTube API with `youtubei.js` (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text: a YouTube post keeps its large playable link preview, while a Bluesky video post degrades to plain text with previews disabled.
 
   The stream URL is scrambled by a function inside YouTube's player script. `services/youtube_video.js` runs that function in a `node:vm` realm whose global object is empty — no `process`, no `require`, no `fetch` — with a hard timeout, so third-party script has nothing to reach the bot token or the database with. It also prefers YouTube's app clients, because the `WEB` client now demands a Proof-of-Origin token and answers 403 without one. If YouTube tightens that further, the download simply fails and the post degrades to the link preview.
 - **Moderation shows the real thing.** Albums and native videos are previewed in the moderation chat exactly as they will be published, so an admin approves what actually goes out. The cost is that a video is downloaded twice — once for the preview, once for publishing.
@@ -527,8 +530,8 @@ Rivals UA community server. It is **independent** from the Telegram flow and is
 official server does not expose Follow Channel access.
 
 Both bots run in the **same process**: `main.js` starts the Discord bot as a
-background asyncio task alongside the existing Telegram long-polling loop. There
-is still only one `asyncio.run()`. If the Discord bot is disabled, misconfigured,
+cancellable background task (`createTask`) alongside the existing Telegram
+long-polling loop, inside the same Node process. If the Discord bot is disabled, misconfigured,
 or fails to log in, it logs a safe message and the Telegram bot keeps running
 normally. Secrets are never logged.
 
@@ -602,10 +605,10 @@ All command descriptions and user-facing replies are in Ukrainian.
 - `/clear amount` — delete 1–100 recent messages in the current channel (requires Manage Messages).
 - `/timeout user minutes reason` — timeout a member for 1–40320 minutes / up to 28 days (requires Moderate Members).
 - `/warn user reason` — warn a member; stored in persistent history, logged to the mod-log channel, and DM'd to the user when possible (requires Moderate Members).
-- `/warnings user` — show a member's warning history (requires Moderate Members).
-- `/clearwarnings user` — clear a member's warning history (requires Moderate Members).
+- `/warnings member` — show a member's warning history (requires Moderate Members).
+- `/clearwarnings member` — clear a member's warning history (requires Moderate Members).
 - `/report member reason` — **available to any member**; sends a report to the mod-log channel. The reporter gets an ephemeral confirmation and a light per-user cooldown prevents spam.
-- `/lfthelp` — **available to any member**; shows an ephemeral guide for the looking-for-team forum (how to create a post, tags, post template). Links the forum when `DISCORD_LFT_CHANNEL_ID` is set. The forum itself can be (re)configured with `node scripts/setup_lft_forum.js` (needs Manage Channels + Manage Threads on the forum channel).
+- `/lfthelp` — **available to any member**; shows an ephemeral guide for the looking-for-team forum (how to create a post, tags, post template). Links the forum when `DISCORD_LFT_CHANNEL_ID` is set. The forum itself can be (re)configured with `node scripts/setup_lft_forum.js` (needs Manage Channels, Send Messages / Create Posts, and Manage Threads on the forum channel).
 
 Each moderator command re-checks permissions at runtime and reports problems
 privately (ephemeral) instead of failing loudly.
@@ -651,7 +654,7 @@ starts automatically next to the Telegram bot. To run Telegram only, set
 The same Telegram bot can also moderate community group chats (for example
 `t.me/UAMarvelRivalsChat`). It mirrors the Discord moderation feature set but uses
 the native Telegram API and runs in the **same process** as the news/submission
-flow — there is no second bot and still only one `asyncio.run()`. It is disabled
+flow — there is no second bot and still only one grammY `bot.start()` polling loop. It is disabled
 by default and never affects the submission/news flows when off.
 
 The moderation logic lives in [`handlers/moderation.js`](handlers/moderation.js)
@@ -796,7 +799,7 @@ bot behaves exactly as before.
 ## Current Limitations
 
 - Polling mode only, no webhook setup.
-- No role management inside Telegram. Admin access comes only from `ADMIN_USER_IDS`.
+- No role management inside Telegram. Access to the news/submission queue comes only from `ADMIN_USER_IDS`; in a moderated group chat the bot additionally treats that chat's own Telegram administrators as moderators.
 - The official news site is parsed for photos only; video comes from Bluesky and YouTube instead.
 - Every AI feature depends on one Gemini API key. Without it the collectors still fetch and count items but produce no drafts, and the trivia rubric does not run at all.
 - Album, YouTube, and downloaded-video posts cannot be edited from moderation — only approved or rejected.
