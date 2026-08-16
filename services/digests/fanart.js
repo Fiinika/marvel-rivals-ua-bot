@@ -93,7 +93,10 @@ export async function runFanartDigestOnce(bot, config, db, { now = null, force =
   // The fetcher already upgrades preview.redd.it thumbnails to their full-res
   // i.redd.it original, so only posts with no Reddit-hosted image at all
   // (gallery/video/external-link previews) are skipped here.
-  const arts = posts.filter((post) => isDirectImage(post.image_url)).slice(0, config.fanart_digest_count);
+  const arts = pickDigestArts(
+    posts.filter((post) => isDirectImage(post.image_url)),
+    config.fanart_digest_count,
+  );
   if (!arts.length) {
     logger.warning(`Fan-art digest for ${weekKey} found no direct-image posts; not marking the week done.`);
     return false;
@@ -187,6 +190,47 @@ function isDirectImage(url) {
 
 // Exported for the unit tests, which cover the image/author/week helpers directly.
 export const __testing = { authorHandle, isDirectImage, isoWeekKey };
+
+/** At most this many works by one artist in a single digest. */
+export const MAX_ARTS_PER_AUTHOR = 3;
+
+/**
+ * The week's top art, capped per artist.
+ *
+ * Reddit's weekly top is ranked per post, so one prolific artist could take
+ * four of ten slots and the digest stopped reading as a community round-up.
+ * Posts keep their original ranking; a fourth work by the same artist is only
+ * held back, and is used to refill the album if capping would otherwise leave
+ * it short — a digest with fewer images is worse than a slightly lopsided one.
+ * An empty/unknown author is never capped, since those are not one person.
+ */
+export function pickDigestArts(posts, limit, maxPerAuthor = MAX_ARTS_PER_AUTHOR) {
+  const picked = [];
+  const heldBack = [];
+  const perAuthor = new Map();
+
+  for (const post of posts) {
+    if (picked.length >= limit) break;
+    const author = authorHandle(post.author).toLowerCase();
+    if (!author) {
+      picked.push(post);
+      continue;
+    }
+    const used = perAuthor.get(author) ?? 0;
+    if (used >= maxPerAuthor) {
+      heldBack.push(post);
+      continue;
+    }
+    perAuthor.set(author, used + 1);
+    picked.push(post);
+  }
+
+  for (const post of heldBack) {
+    if (picked.length >= limit) break;
+    picked.push(post);
+  }
+  return picked;
+}
 
 function authorHandle(author) {
   let name = lstrip(String(author ?? "").trim(), "/");

@@ -14,7 +14,13 @@ import { Database } from "../database.js";
 import { buildAdminComposer } from "../handlers/admin.js";
 import * as redditFeedFetcher from "../services/collectors/reddit/feed_fetcher.js";
 import * as fanart from "../services/digests/fanart.js";
-import { __testing, nextWeeklyRunAt, runFanartDigestOnce } from "../services/digests/fanart.js";
+import {
+  MAX_ARTS_PER_AUTHOR,
+  __testing,
+  nextWeeklyRunAt,
+  pickDigestArts,
+  runFanartDigestOnce,
+} from "../services/digests/fanart.js";
 import { t } from "../services/i18n.js";
 import * as moderationModule from "../services/moderation.js";
 import { albumImageUrls } from "../services/publisher.js";
@@ -302,4 +308,65 @@ it("dedups and caps the album image URLs", () => {
   expect(albumImageUrls({ parts: [], media_url: "only" })).toEqual(["only"]);
   const many = { parts: Array.from({ length: 12 }, (_value, index) => ({ media_url: `u${index}` })) };
   expect(albumImageUrls(many)).toEqual(Array.from({ length: 10 }, (_value, index) => `u${index}`));
+});
+
+
+// --- per-artist cap ---------------------------------------------------------
+//
+// Reddit ranks the weekly top per post, so one prolific artist could take four
+// of the ten slots and the digest stopped reading as a community round-up.
+
+const art = (author, id) => ({ author, image_url: `https://i.redd.it/${id}.jpg`, web_url: `https://r/${id}` });
+
+it("takes at most three works from one artist", () => {
+  const posts = [
+    art("u/Popo", 1), art("u/Popo", 2), art("u/Popo", 3), art("u/Popo", 4),
+    art("u/Other", 5), art("u/Third", 6),
+  ];
+
+  const picked = pickDigestArts(posts, 5);
+
+  expect(picked.filter((post) => post.author === "u/Popo")).toHaveLength(MAX_ARTS_PER_AUTHOR);
+  expect(picked.map((post) => post.web_url)).toEqual(["https://r/1", "https://r/2", "https://r/3", "https://r/5", "https://r/6"]);
+});
+
+it("keeps the album full rather than short when capping runs out of artists", () => {
+  // Only two artists posted this week; a strict cap would leave 4 of 6 slots
+  // empty, and a short album is worse than a lopsided one.
+  const posts = [
+    art("u/Popo", 1), art("u/Popo", 2), art("u/Popo", 3), art("u/Popo", 4), art("u/Popo", 5),
+    art("u/Other", 6),
+  ];
+
+  const picked = pickDigestArts(posts, 6);
+
+  expect(picked).toHaveLength(6);
+  // Capped picks keep their ranking; the held-back works refill the tail in order.
+  expect(picked.map((post) => post.web_url)).toEqual([
+    "https://r/1",
+    "https://r/2",
+    "https://r/3",
+    "https://r/6",
+    "https://r/4",
+    "https://r/5",
+  ]);
+});
+
+it("never caps unknown authors together", () => {
+  const posts = [art("", 1), art("", 2), art("", 3), art("", 4), art("u/Popo", 5)];
+
+  expect(pickDigestArts(posts, 5)).toHaveLength(5);
+});
+
+it("normalises the handle before counting, so u/X and X are one artist", () => {
+  const posts = [art("u/Popo", 1), art("Popo", 2), art("/u/POPO", 3), art("popo", 4), art("u/Other", 5)];
+
+  const picked = pickDigestArts(posts, 5);
+
+  expect(picked.map((post) => post.web_url)).toEqual(["https://r/1", "https://r/2", "https://r/3", "https://r/5", "https://r/4"]);
+});
+
+it("leaves a already-varied week untouched", () => {
+  const posts = [art("u/A", 1), art("u/B", 2), art("u/C", 3)];
+  expect(pickDigestArts(posts, 10).map((post) => post.web_url)).toEqual(["https://r/1", "https://r/2", "https://r/3"]);
 });

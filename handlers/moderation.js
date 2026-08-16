@@ -1168,7 +1168,11 @@ async function sendModLog(bot, config, { action, targetHtml, moderatorHtml, reas
     reason: reason ? htmlEscape(reason) : t("moderation.reason.none"),
   });
   if (preview) {
-    const safe = sliceChars(htmlEscape(preview), 0, 200);
+    // Truncate BEFORE escaping: cutting the escaped text can land inside an
+    // entity ("A&amp;B" -> "A&a"), and Telegram rejects the whole mod-log
+    // message with "can't parse entities". Slicing first also makes the 200 a
+    // count of visible characters, which is what it was always meant to be.
+    const safe = htmlEscape(sliceChars(preview, 0, 200));
     if (safe.trim()) {
       text += `\n${t("moderation.log.preview", { preview: safe })}`;
     }
@@ -1197,7 +1201,11 @@ async function sendReportLog(
     reason: htmlEscape(reason),
   });
   if (preview) {
-    const safe = sliceChars(htmlEscape(preview), 0, 200);
+    // Truncate BEFORE escaping: cutting the escaped text can land inside an
+    // entity ("A&amp;B" -> "A&a"), and Telegram rejects the whole mod-log
+    // message with "can't parse entities". Slicing first also makes the 200 a
+    // count of visible characters, which is what it was always meant to be.
+    const safe = htmlEscape(sliceChars(preview, 0, 200));
     if (safe.trim()) {
       text += `\n${t("moderation.log.preview", { preview: safe })}`;
     }

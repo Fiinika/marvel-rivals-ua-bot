@@ -790,7 +790,9 @@ class ModerationBot {
     });
     embed.addFields({ name: "Reason", value: sliceChars(reason || "—", 0, 1024), inline: true });
     if (preview) {
-      const safe = sliceChars(escapeMarkdown(preview), 0, 200);
+      // Truncate before escaping, so a cut cannot strand the backslash of an
+      // escape sequence at the end of the preview.
+      const safe = escapeMarkdown(sliceChars(preview, 0, 200));
       if (safe) {
         embed.addFields({ name: "Message preview", value: safe, inline: false });
       }
