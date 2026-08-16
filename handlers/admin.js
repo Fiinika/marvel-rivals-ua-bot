@@ -24,7 +24,11 @@ import { runFanartDigestOnce } from "../services/digests/fanart.js";
 import { formatAdminPreview } from "../services/formatter.js";
 import { t } from "../services/i18n.js";
 import { getLogger } from "../services/logger.js";
-import { formatPostHtml, submissionAllowsSourceLink } from "../services/post_footer.js";
+import {
+  formatPostHtml,
+  stripRenderedCommunityFooter,
+  submissionAllowsSourceLink,
+} from "../services/post_footer.js";
 import { htmlUnescape, isDigits, splitWhitespace } from "../services/pyutils.js";
 import {
   DISABLED_LINK_PREVIEW,
@@ -940,7 +944,7 @@ async function savePartDraft(ctx, submissionId, partIndex, bot, config, db) {
     return;
   }
 
-  const newText = messageText(callbackMessage).trim();
+  const newText = stripRenderedCommunityFooter(messageText(callbackMessage)).trim();
   const validationError = validatePartText(part, newText);
   if (validationError !== null) {
     await answerCallback(ctx, validationError, { showAlert: true });
@@ -985,34 +989,44 @@ async function copyPartToDraftMessage(bot, config, submissionId, part) {
   return message.message_id;
 }
 
+/**
+ * The editable copy of a part: the STORED body, verbatim and unrendered.
+ *
+ * It deliberately does not go through formatPartForModeration. Saving takes the
+ * visible text of this message back as `part.text`, so anything rendering adds
+ * here — the community footer above all — would be stored as if the admin had
+ * typed it, and then appended a second time on the next render. Every other
+ * consumer of `part.text` already assumes it is the bare body: validatePartText
+ * renders it before measuring, and publishing renders it again.
+ *
+ * Sent without parse_mode for the same reason: the body is plain text, and
+ * asking Telegram to parse it as HTML would both fail on a stray `<` and hand
+ * back a de-tagged string on save.
+ */
 async function sendPartDraftMessage(bot, chatId, part, replyMarkup) {
   const messageType = String(part.message_type || "text");
-  const text = formatPartForModeration(String(part.text || ""), part);
+  const text = stripRenderedCommunityFooter(String(part.text || ""));
   const mediaValue = part.file_id || part.media_url;
   if (partHasMedia(part) && messageType === "photo" && mediaValue) {
     return bot.api.sendPhoto(chatId, mediaValue, {
       caption: text || undefined,
-      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
   }
   if (partHasMedia(part) && messageType === "video" && mediaValue) {
     return bot.api.sendVideo(chatId, mediaValue, {
       caption: text || undefined,
-      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
   }
   if (partHasMedia(part) && messageType === "document" && mediaValue) {
     return bot.api.sendDocument(chatId, mediaValue, {
       caption: text || undefined,
-      parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
   }
 
   return bot.api.sendMessage(chatId, text || t("formatter.empty"), {
-    parse_mode: "HTML",
     reply_markup: replyMarkup,
     link_preview_options: DISABLED_LINK_PREVIEW,
   });
@@ -1071,7 +1085,7 @@ async function addPartAndRefreshMetadata({
 
   await db.addSubmissionPart(submissionId, {
     message_type: messageType,
-    text,
+    text: stripRenderedCommunityFooter(text),
     file_id: fileId,
     media_url: null,
     media_type: mediaTypeFor(messageType),

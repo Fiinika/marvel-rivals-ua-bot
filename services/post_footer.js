@@ -79,6 +79,30 @@ export function submissionAllowsSourceLink(part) {
  * contain. Text without the sentinel (i.e. anything we did not just footer) is
  * returned unchanged.
  */
+/**
+ * Remove trailing rendered community footers from plain text.
+ *
+ * `stripCommunityFooter` below cannot do this: it looks for the private-use
+ * sentinel, which `formatPostHtml` deletes before the text ever leaves the
+ * process. So the footer an admin sees in a draft carries no marker at all, and
+ * the only reliable handle on it is the exact block `formatCommunityFooter`
+ * produces.
+ *
+ * Loops, because a draft saved more than once before this was fixed can carry
+ * several stacked footers; each pass peels one off.
+ */
+export function stripRenderedCommunityFooter(text) {
+  const footer = rstrip(formatCommunityFooter());
+  let result = rstrip(String(text ?? ""));
+  if (!footer) {
+    return result;
+  }
+  while (result.endsWith(footer)) {
+    result = rstrip(result.slice(0, result.length - footer.length));
+  }
+  return result;
+}
+
 export function stripCommunityFooter(text) {
   const index = String(text).indexOf(FOOTER_SENTINEL);
   if (index === -1) {
