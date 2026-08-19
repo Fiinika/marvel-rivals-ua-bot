@@ -4,11 +4,11 @@ import { InputFile } from "grammy";
 
 import { getLogger } from "./logger.js";
 import { formatPostHtml, submissionAllowsSourceLink } from "./post_footer.js";
-import { charLength, errorText, htmlUnescape, isDigits, rfindChars, sliceChars } from "./pyutils.js";
+import { charLength, errorText, htmlUnescape, isDigits, rfindChars, rstrip, sliceChars } from "./pyutils.js";
 import { isTelegramBadRequest, isTelegramSendFailure, telegramErrorText } from "./telegram_errors.js";
 import { delayBetweenTelegramSends, sendWithRetries } from "./telegram_retry.js";
 import { urlsplit } from "./urlutils.js";
-import { downloadYoutubeVideo } from "./youtube_video.js";
+import { downloadYoutubeVideo, extractVideoId } from "./youtube_video.js";
 
 const logger = getLogger("services.publisher");
 
@@ -129,10 +129,9 @@ async function publishAlbum(bot, config, submission) {
 
 async function publishTextOrYoutubeVideo(bot, config, submission, text, { parseMode }) {
   const linkPreview = linkPreviewOptionsFor(submission);
-  const sourceType = String(submission.source_type || "");
-  const sourceUrl = String(submission.source_url || "").trim();
-  if (config.enable_youtube_video_download && PREVIEW_LINK_SOURCE_TYPES.has(sourceType) && isSafeHttpUrl(sourceUrl)) {
-    await sendYoutubePost(bot, config.publish_chat_id, sourceUrl, text, {
+  const youtubeUrl = youtubeVideoUrl(submission);
+  if (config.enable_youtube_video_download && youtubeUrl) {
+    await sendYoutubePost(bot, config.publish_chat_id, youtubeUrl, text, {
       parseMode,
       linkPreview,
       maxBytes: Math.max(1, config.youtube_video_max_mb) * 1024 * 1024,
@@ -300,16 +299,80 @@ async function sendVideoBytes(bot, chatId, data, filename, caption, { parseMode 
 }
 
 /**
- * Enable a large, playable link preview of the source URL for sources in
- * PREVIEW_LINK_SOURCE_TYPES (YouTube); disable previews for everything else.
+ * The URL a post should preview, or null when it should show no preview.
+ *
+ * Collector posts preview only their source URL, and only for the sources whose
+ * link is the point of the post (YouTube). A reader's own submission has no
+ * source URL — the link is simply in the text they sent — and a bare URL with
+ * previews off publishes as naked blue text, telling nobody what is behind it,
+ * so the first link in their message is previewed instead.
+ */
+export function previewLinkUrl(submission) {
+  const sourceType = String(submission.source_type || "").trim();
+  const sourceUrl = String(submission.source_url || "").trim();
+  if (sourceType) {
+    return PREVIEW_LINK_SOURCE_TYPES.has(sourceType) && isSafeHttpUrl(sourceUrl) ? sourceUrl : null;
+  }
+
+  return firstSafeUrl(String(submission.text ?? submission.draft_text ?? ""));
+}
+
+/**
+ * Enable a large, playable preview of that URL; disable previews when there is
+ * none to show.
  */
 export function linkPreviewOptionsFor(submission) {
-  const sourceType = String(submission.source_type || "");
-  const sourceUrl = String(submission.source_url || "").trim();
-  if (PREVIEW_LINK_SOURCE_TYPES.has(sourceType) && isSafeHttpUrl(sourceUrl)) {
-    return { is_disabled: false, url: sourceUrl, prefer_large_media: true, show_above_text: true };
+  const url = previewLinkUrl(submission);
+  if (!url) {
+    return DISABLED_LINK_PREVIEW;
   }
-  return DISABLED_LINK_PREVIEW;
+  return { is_disabled: false, url, prefer_large_media: true, show_above_text: true };
+}
+
+/**
+ * The YouTube watch URL a post should be published as native video, or null.
+ *
+ * The collector path takes it from the stored source URL; a reader who drops a
+ * YouTube link into the bot gets the same treatment, with the link read out of
+ * their message.
+ */
+export function youtubeVideoUrl(submission) {
+  const url = previewLinkUrl(submission);
+  if (!url) {
+    return null;
+  }
+  if (String(submission.source_type || "").trim()) {
+    return url; // already gated on PREVIEW_LINK_SOURCE_TYPES
+  }
+  return extractVideoId(url) === null ? null : url;
+}
+
+/**
+ * The first previewable http(s) URL in a plain-text body, or null.
+ *
+ * Plain http is allowed — Telegram fetches the preview itself, and readers do
+ * send http links — but an IP-literal host in a non-public range is not: there
+ * is nothing to preview at an internal address, and it has no business being
+ * handed on.
+ */
+function firstSafeUrl(text) {
+  for (const match of text.matchAll(/https?:\/\/\S+/gi)) {
+    // Trailing sentence punctuation is not part of the URL a reader meant.
+    const candidate = rstrip(match[0], ".,;:!?)]}»\"'");
+    if (isSafeHttpUrl(candidate) && isPublicHost(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isPublicHost(url) {
+  const host = urlsplit(url).hostname;
+  if (!host) {
+    return false;
+  }
+  const ipVersion = net.isIP(host);
+  return ipVersion === 0 || isGlobalIp(host, ipVersion);
 }
 
 /**

@@ -15,7 +15,9 @@ import {
   isFetchableMediaUrl,
   linkPreviewOptionsFor,
   needsExternalVideoDownload,
+  previewLinkUrl,
   sendAlbumMessage,
+  youtubeVideoUrl,
 } from "../services/publisher.js";
 import { fakeBot } from "./helpers/telegram.js";
 
@@ -55,6 +57,66 @@ it("enables the link preview for YouTube only", () => {
   // Other sources keep previews disabled, and youtube without a URL stays disabled.
   expect(linkPreviewOptionsFor({ source_type: "bluesky", source_url: "https://x" }).is_disabled).toBe(true);
   expect(linkPreviewOptionsFor({ source_type: "youtube", source_url: "" }).is_disabled).toBe(true);
+});
+
+// --- a reader's own link ---------------------------------------------------------
+
+it("previews the link a reader sent, which has no source URL", () => {
+  // Published with previews off, a submitted link was naked blue text: no title,
+  // no thumbnail, nothing saying what is behind it.
+  const preview = linkPreviewOptionsFor({
+    message_type: "link",
+    text: "гляньте що знайшов https://marvelrivals.com/news/season-10 крутяк",
+  });
+
+  expect(preview.is_disabled).toBe(false);
+  expect(preview.url).toBe("https://marvelrivals.com/news/season-10");
+  expect(preview.show_above_text).toBe(true);
+});
+
+it("reads the link out of a stored draft too", () => {
+  expect(previewLinkUrl({ draft_text: "https://youtu.be/dQw4w9WgXcQ" })).toBe("https://youtu.be/dQw4w9WgXcQ");
+});
+
+it("trims sentence punctuation off a submitted link", () => {
+  expect(previewLinkUrl({ text: "дивіться (https://marvelrivals.com/news/x), новий скін!" })).toBe(
+    "https://marvelrivals.com/news/x",
+  );
+});
+
+it("shows no preview for a reader's plain text", () => {
+  expect(linkPreviewOptionsFor({ text: "коли вже нерфнуть Хелу" }).is_disabled).toBe(true);
+  expect(previewLinkUrl({ text: "" })).toBeNull();
+});
+
+it("never previews an internal or non-http link a reader sent", () => {
+  // The same SSRF guard the media downloader uses: previewing it would have
+  // Telegram fetch an internal address on our behalf.
+  expect(previewLinkUrl({ text: "http://169.254.169.254/latest/meta-data/" })).toBeNull();
+  expect(previewLinkUrl({ text: "ftp://example.com/x" })).toBeNull();
+});
+
+it("keeps a collector post previewing its own source, never the body", () => {
+  // A Bluesky post may quote any URL; that must not become the preview.
+  expect(previewLinkUrl({ source_type: "bluesky", source_url: "https://x", text: "https://evil.example/x" })).toBeNull();
+});
+
+it("routes a reader's YouTube link to native video, and nothing else", () => {
+  expect(youtubeVideoUrl({ message_type: "link", text: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" })).toBe(
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  );
+  expect(youtubeVideoUrl({ message_type: "link", text: "https://youtu.be/dQw4w9WgXcQ" })).toBe(
+    "https://youtu.be/dQw4w9WgXcQ",
+  );
+  // A non-YouTube link is previewed, not downloaded.
+  expect(youtubeVideoUrl({ message_type: "link", text: "https://marvelrivals.com/news/x" })).toBeNull();
+  // A look-alike host must not reach the downloader.
+  expect(youtubeVideoUrl({ message_type: "link", text: "https://youtube.com.attacker.example/watch?v=x" })).toBeNull();
+  // The collector path is unchanged.
+  expect(youtubeVideoUrl({ source_type: "youtube", source_url: "https://www.youtube.com/watch?v=x" })).toBe(
+    "https://www.youtube.com/watch?v=x",
+  );
+  expect(youtubeVideoUrl({ source_type: "bluesky", source_url: "https://bsky.app/x" })).toBeNull();
 });
 
 it("passes a pre-rendered album caption through and formats the rest", () => {

@@ -6,11 +6,11 @@ import { formatPostHtml, submissionAllowsSourceLink } from "./post_footer.js";
 import { htmlUnescape } from "./pyutils.js";
 import {
   DISABLED_LINK_PREVIEW,
-  PREVIEW_LINK_SOURCE_TYPES,
   TELEGRAM_CAPTION_LIMIT,
   albumCaptionHtml,
   albumItems,
   linkPreviewOptionsFor,
+  youtubeVideoUrl,
   needsExternalVideoDownload,
   sendAlbumMessage,
   sendDocument,
@@ -142,16 +142,14 @@ async function sendPartMessage(bot, config, chatId, part) {
   const mediaValue = fileId || mediaUrl;
   const usesExternalMedia = !fileId && Boolean(mediaUrl);
 
-  // A YouTube post is text + a source link; preview it the SAME way it will be
-  // published — as a native inline video (downloaded), falling back to a playable
-  // link preview — so the admin approves exactly what goes out.
-  if (
-    messageType === "text" &&
-    config.enable_youtube_video_download &&
-    PREVIEW_LINK_SOURCE_TYPES.has(String(part.source_type || "")) &&
-    String(part.source_url || "").trim()
-  ) {
-    const sent = await sendYoutubePost(bot, chatId, String(part.source_url), text, {
+  // A YouTube post is text + a link; preview it the SAME way it will be published
+  // — as a native inline video (downloaded), falling back to a playable link
+  // preview — so the admin approves exactly what goes out. That covers both the
+  // collector, whose link is the stored source URL, and a reader who dropped a
+  // YouTube link into the bot, whose link is in the text they sent.
+  const youtubeUrl = ["text", "link"].includes(messageType) ? youtubeVideoUrl(part) : null;
+  if (config.enable_youtube_video_download && youtubeUrl) {
+    const sent = await sendYoutubePost(bot, chatId, youtubeUrl, text, {
       parseMode: "HTML",
       linkPreview: linkPreviewOptionsFor(part),
       maxBytes: Math.max(1, config.youtube_video_max_mb) * 1024 * 1024,
