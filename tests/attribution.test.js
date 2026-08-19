@@ -1,7 +1,8 @@
 /**
- * Tests for per-source attribution: the Gemini source/hashtag lines for
- * non-official sources, the shared allow-source-link predicate, and the generic
- * "Джерело: <name>" footer linkification (official linkification must stay intact).
+ * Tests for per-source attribution: the source line is admin-only metadata, so a
+ * public post carries none — except the official reader link and the wiki rubric's
+ * CC BY-SA credit. Covers the Gemini source/hashtag lines, the shared
+ * allow-source-link predicate, and the "Джерело: <name>" footer linkification.
  */
 
 import { expect, it } from "vitest";
@@ -24,8 +25,18 @@ function draft(sourceType, sourceName = "MR Bluesky") {
   });
 }
 
-it("uses the source name for non-official attribution", () => {
-  expect(sourceAttributionLine(draft("bluesky", "MR Bluesky"))).toBe("Джерело: MR Bluesky");
+it("gives an ordinary collector post no public source line", () => {
+  // The source is shown to moderators in the submission card, not to readers.
+  expect(sourceAttributionLine(draft("bluesky", "MR Bluesky"))).toBe("");
+  expect(sourceAttributionLine(draft("youtube", "YouTube Marvel Rivals"))).toBe("");
+  expect(sourceAttributionLine(draft("reddit", "Reddit"))).toBe("");
+  expect(sourceAttributionLine(draft("rivalskins", "RivalSkins"))).toBe("");
+});
+
+it("keeps the wiki credit, which CC BY-SA requires", () => {
+  expect(sourceAttributionLine(draft("wiki_facts", "Marvel Rivals Wiki (CC BY-SA)"))).toBe(
+    "Джерело: Marvel Rivals Wiki (CC BY-SA)",
+  );
 });
 
 it("leaves official attribution unchanged", () => {
@@ -123,6 +134,7 @@ it("gates the source link on both a source type and a URL", () => {
 it("linkifies a generic source line", () => {
   const html = formatPostHtml("Текст новини.\n\nДжерело: MR Bluesky", {
     source_url: "https://bsky.app/profile/x",
+    source_type: "wiki_facts",
     allow_source_link: true,
   });
   expect(html).toContain('<a href="https://bsky.app/profile/x">MR Bluesky</a>');
@@ -132,6 +144,7 @@ it("linkifies a generic source line", () => {
 it("does not link a generic source when disallowed", () => {
   const html = formatPostHtml("Джерело: MR Bluesky", {
     source_url: "https://bsky.app/profile/x",
+    source_type: "wiki_facts",
     allow_source_link: false,
   });
   expect(html).not.toContain("<a");
@@ -139,13 +152,65 @@ it("does not link a generic source when disallowed", () => {
 });
 
 it("does not link a generic source without a URL", () => {
-  const html = formatPostHtml("Джерело: MR Bluesky", { source_url: "", allow_source_link: true });
+  const html = formatPostHtml("Джерело: MR Bluesky", {
+    source_url: "",
+    source_type: "wiki_facts",
+    allow_source_link: true,
+  });
   expect(html).not.toContain("<a");
+});
+
+it("drops a source line from an ordinary collector post at render time", () => {
+  // Covers drafts queued before the line became admin-only: they must not reach
+  // the channel with it, and the moderation preview must show what will publish.
+  const html = formatPostHtml("Текст новини.\n\nДжерело: YouTube Marvel Rivals\n\n#MarvelRivalsUA", {
+    source_url: "https://youtube.com/watch?v=1",
+    source_type: "youtube",
+    allow_source_link: true,
+  });
+
+  expect(html).not.toContain("Джерело");
+  expect(html).not.toContain("YouTube Marvel Rivals");
+  expect(html).toContain("Текст новини.");
+  expect(html).toContain("#MarvelRivalsUA");
+  // The gap the removed line left is closed, not left as a double blank.
+  expect(html).not.toContain("\n\n\n");
+});
+
+it("keeps a source line the wiki rubric is licensed to show", () => {
+  const html = formatPostHtml("Чи знали ви, що…\n\nДжерело: Marvel Rivals Wiki (CC BY-SA)", {
+    source_url: "https://marvelrivals.fandom.com/wiki/Loki",
+    source_type: "wiki_facts",
+    allow_source_link: true,
+  });
+
+  expect(html).toContain('<a href="https://marvelrivals.fandom.com/wiki/Loki">Marvel Rivals Wiki (CC BY-SA)</a>');
+});
+
+it("leaves a user submission's own text alone", () => {
+  // No source type = a reader's submission; its wording is the author's, not ours.
+  const html = formatPostHtml("Дивіться, що знайшов.\n\nДжерело: мій друг", {
+    source_url: "",
+    allow_source_link: false,
+  });
+
+  expect(html).toContain("Джерело: мій друг");
+});
+
+it("keeps an inline source mention that is not a label line", () => {
+  const html = formatPostHtml("Гравці кажуть (джерело: форум), що патч близько.", {
+    source_url: "https://reddit.com/x",
+    source_type: "reddit",
+    allow_source_link: true,
+  });
+
+  expect(html).toContain("джерело: форум");
 });
 
 it("still linkifies the official source", () => {
   const html = formatPostHtml(`Текст. ${OFFICIAL_SOURCE_ATTRIBUTION}`, {
     source_url: "https://www.marvelrivals.com/news/",
+    source_type: "official_marvel_rivals",
     allow_source_link: true,
   });
   expect(html).toContain('<a href="https://www.marvelrivals.com/news/">офіційному сайті</a>');
@@ -189,8 +254,24 @@ it("gives a short-form draft no publication-date line", () => {
   const result = ensureRequiredMetadata("Текст допису про подію.", draftInput);
 
   expect(result).not.toContain("2026-06-12");
-  expect(result).toContain("Джерело: MR Bluesky");
+  expect(result).not.toContain("Джерело");
   expect(result).toContain("#MarvelRivalsUA");
+});
+
+it("drops a source line the model added to a short-form draft anyway", () => {
+  const result = ensureRequiredMetadata("Текст допису.\n\nДжерело: MR Bluesky", draft("bluesky", "MR Bluesky"));
+
+  expect(result).not.toContain("Джерело");
+  expect(result).toContain("Текст допису.");
+});
+
+it("adds the wiki credit to a fact draft that omitted it", () => {
+  const result = ensureRequiredMetadata(
+    "Чи знали ви, що Локі списаний з коміксу?",
+    draft("wiki_facts", "Marvel Rivals Wiki (CC BY-SA)"),
+  );
+
+  expect(result).toContain("Джерело: Marvel Rivals Wiki (CC BY-SA)");
 });
 
 it("adds the rumour notice to a Reddit prompt", () => {
@@ -210,7 +291,13 @@ it("adds no rumour notice to a non-rumour source", () => {
 it("fills every placeholder in the short-form prompt", () => {
   const prompt = buildPrompt(draft("bluesky", "MR Bluesky"));
   expect(prompt).toContain("MR Bluesky");
-  expect(prompt).toContain("Джерело: MR Bluesky"); // per-source attribution line
   expect(prompt).not.toContain("{"); // every placeholder was filled
   expect(prompt).not.toContain("}");
+});
+
+it("tells the short-form prompt not to attribute at all", () => {
+  const prompt = buildPrompt(draft("bluesky", "MR Bluesky"));
+
+  expect(prompt).toContain("НЕ додавай атрибуцію");
+  expect(prompt).not.toContain("Джерело: MR Bluesky");
 });

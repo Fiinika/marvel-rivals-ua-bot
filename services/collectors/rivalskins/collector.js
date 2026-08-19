@@ -39,6 +39,7 @@ export class RivalSkinsCollector extends BaseNewsCollector {
   async parseEntry(entry) {
     const post = entry.payload;
     const hasMedia = Boolean(post.image_url);
+    const extraImages = post.additional_image_urls ?? [];
     const title = deriveTitle(post.title);
 
     return draftCandidate({
@@ -54,7 +55,9 @@ export class RivalSkinsCollector extends BaseNewsCollector {
       has_media: hasMedia,
       media_url: hasMedia ? post.image_url : null,
       media_type: hasMedia ? "photo" : "none",
-      additional_media_urls: null,
+      // A leak post often shows the skin from several angles; those extra renders
+      // publish as one album instead of being thrown away.
+      additional_media_urls: hasMedia && extraImages.length ? extraImages : null,
     });
   }
 }

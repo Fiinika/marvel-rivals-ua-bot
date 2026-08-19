@@ -1230,6 +1230,7 @@ function formatPartForModeration(text, part = null) {
   const source = part ?? {};
   return formatPostHtml(text, {
     source_url: String(source.source_url || ""),
+    source_type: source.source_type,
     allow_source_link: submissionAllowsSourceLink(source),
     include_community_footer: true,
   });

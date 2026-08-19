@@ -152,12 +152,21 @@ it("defaults the YouTube source", () => {
   expect([...config.youtube_exclude_keywords].sort()).toEqual([...DEFAULT_YOUTUBE_EXCLUDE_KEYWORDS].sort());
   expect(config.enable_youtube_video_download).toBe(true);
   expect(config.youtube_video_max_mb).toBe(48);
+  // A server needs the PO token to download at all, so it is on unless refused.
+  expect(config.enable_youtube_po_token).toBe(true);
+  expect(config.youtube_cookie).toBe("");
 });
 
 it("can disable the YouTube video download", () => {
   const config = load({ ENABLE_YOUTUBE_VIDEO_DOWNLOAD: "false", YOUTUBE_VIDEO_MAX_MB: "20" });
   expect(config.enable_youtube_video_download).toBe(false);
   expect(config.youtube_video_max_mb).toBe(20);
+});
+
+it("takes the PO-token switch and a cookie", () => {
+  const config = load({ ENABLE_YOUTUBE_PO_TOKEN: "false", YOUTUBE_COOKIE: "  SID=abc; HSID=def  " });
+  expect(config.enable_youtube_po_token).toBe(false);
+  expect(config.youtube_cookie).toBe("SID=abc; HSID=def");
 });
 
 it("honours YouTube overrides", () => {

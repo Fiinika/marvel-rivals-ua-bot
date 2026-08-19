@@ -248,6 +248,72 @@ export class Database {
     });
   }
 
+  /**
+   * One album submission from a reader's own media group.
+   *
+   * Telegram delivers an album as separate messages that only share a
+   * `media_group_id`, so the handler regroups them and stores ONE submission with
+   * a part per item — otherwise five photos became five queue entries and five
+   * single-photo posts. Items carry a `file_id` (Telegram already holds the file)
+   * and their own `media_type`, so a photo-and-video album survives as one post.
+   */
+  async createUserAlbumSubmission({ user_id, username, original_text, items }) {
+    const albumItems = [];
+    const seen = new Set();
+    for (const item of items ?? []) {
+      const fileId = String(item?.file_id ?? "").trim();
+      if (!fileId || seen.has(fileId)) continue;
+      seen.add(fileId);
+      albumItems.push({ file_id: fileId, media_type: String(item?.media_type ?? "photo") });
+      if (albumItems.length >= 10) break; // Telegram's media-group maximum
+    }
+    if (!albumItems.length) {
+      throw new Error("album submission requires at least one media item");
+    }
+
+    const now = utcNowIso();
+    const caption = String(original_text ?? "").trim();
+
+    return this.#transaction((db) => {
+      const cursor = db
+        .prepare(
+          `
+          INSERT INTO submissions (
+              user_id, username, message_type, original_text, draft_text,
+              file_id, media_type, status, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          user_id,
+          username ?? null,
+          "album",
+          caption || null,
+          caption,
+          albumItems[0].file_id,
+          albumItems[0].media_type,
+          STATUS_PENDING,
+          now,
+          now,
+        );
+      const submissionId = Number(cursor.lastInsertRowid);
+      replaceSubmissionParts(
+        db,
+        submissionId,
+        albumItems.map((item, position) => ({
+          message_type: "album",
+          text: position === 0 ? caption : "",
+          file_id: item.file_id,
+          media_url: null,
+          media_type: item.media_type,
+        })),
+        now,
+      );
+      return submissionId;
+    });
+  }
+
   async createAiNewsSubmission({
     username,
     original_text,

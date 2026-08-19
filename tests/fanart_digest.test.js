@@ -23,7 +23,7 @@ import {
 } from "../services/digests/fanart.js";
 import { t } from "../services/i18n.js";
 import * as moderationModule from "../services/moderation.js";
-import { albumImageUrls } from "../services/publisher.js";
+import { albumItems } from "../services/publisher.js";
 import { dispatch, fakeBot, messageUpdate, sentTexts } from "./helpers/telegram.js";
 
 const { authorHandle, isDirectImage, isoWeekKey } = __testing;
@@ -299,15 +299,19 @@ it("normalises the author handle", () => {
   expect(authorHandle("")).toBe("");
 });
 
-it("dedups and caps the album image URLs", () => {
+it("dedups and caps the album items", () => {
   const submission = {
     parts: [{ media_url: "a" }, { media_url: "b" }, { media_url: "a" }, { media_url: "" }],
     media_url: "x",
   };
-  expect(albumImageUrls(submission)).toEqual(["a", "b"]);
-  expect(albumImageUrls({ parts: [], media_url: "only" })).toEqual(["only"]);
+  expect(albumItems(submission).map((item) => item.media_url)).toEqual(["a", "b"]);
+  expect(albumItems({ parts: [], media_url: "only" }).map((item) => item.media_url)).toEqual(["only"]);
   const many = { parts: Array.from({ length: 12 }, (_value, index) => ({ media_url: `u${index}` })) };
-  expect(albumImageUrls(many)).toEqual(Array.from({ length: 10 }, (_value, index) => `u${index}`));
+  expect(albumItems(many).map((item) => item.media_url)).toEqual(
+    Array.from({ length: 10 }, (_value, index) => `u${index}`),
+  );
+  // A digest album is photos by URL, which is what the collector path has always sent.
+  expect(albumItems(submission).every((item) => item.media_type === "photo" && item.file_id === null)).toBe(true);
 });
 
 

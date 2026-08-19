@@ -64,6 +64,44 @@ it("skips the recurring banner and picks the render", () => {
   // Banner listed FIRST must be skipped in favour of the unique skin render.
   const posts = parseFeed(feedXml(itemXml("Magik Skin", { postId: "p1", imgs: [BANNER, HERO] })));
   expect(posts[0].image_url).toBe(HERO);
+  expect(posts[0].additional_image_urls).toEqual([]);
+});
+
+it("keeps every render of a post for the album", () => {
+  const second = "https://rivalskins.com/wp-content/uploads/2026/06/Phoenix-back.jpg";
+  const posts = parseFeed(feedXml(itemXml("Phoenix", { postId: "p3", imgs: [HERO, second] })));
+
+  expect(posts[0].image_url).toBe(HERO);
+  expect(posts[0].additional_image_urls).toEqual([second]);
+});
+
+it("drops an image that repeats across posts", () => {
+  // The site ends most posts with the season-roadmap promo of the moment. It is
+  // not that post's content, and hardcoding its filename would not survive the
+  // next season — recurrence within one fetch is the durable signal.
+  const promo = "https://rivalskins.com/wp-content/uploads/2026/08/s10-roadmap-1024x576.jpg";
+  const otherHero = "https://rivalskins.com/wp-content/uploads/2026/08/Ultron-street-style.jpg";
+  const posts = parseFeed(
+    feedXml(
+      itemXml("Phoenix", { postId: "p4", imgs: [HERO, promo] }),
+      itemXml("Ultron", { postId: "p5", imgs: [otherHero, promo] }),
+    ),
+  );
+
+  expect(posts[0].image_url).toBe(HERO);
+  expect(posts[0].additional_image_urls).toEqual([]);
+  expect(posts[1].image_url).toBe(otherHero);
+  expect(posts[1].additional_image_urls).toEqual([]);
+});
+
+it("leaves a post with nothing but a recurring image media-less", () => {
+  const promo = "https://rivalskins.com/wp-content/uploads/2026/08/s10-roadmap-1024x576.jpg";
+  const posts = parseFeed(
+    feedXml(itemXml("A", { postId: "p6", imgs: [promo] }), itemXml("B", { postId: "p7", imgs: [promo] })),
+  );
+
+  expect(posts[0].image_url).toBeNull();
+  expect(posts[1].image_url).toBeNull();
 });
 
 it("rejects an off-site image host", () => {
@@ -113,6 +151,7 @@ it("maps a post to a rumour photo candidate", async () => {
     body_text: "Опис скіна Magik.",
     created_at: "2026-06-09T20:07:38+00:00",
     image_url: HERO,
+    additional_image_urls: [],
   };
   const collector = new RivalSkinsCollector({
     config: { rivalskins_feed_url: "https://rivalskins.com/category/leaks/feed/" },

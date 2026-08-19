@@ -8,9 +8,18 @@ export const OFFICIAL_SOURCE_ATTRIBUTION = "Повні деталі — на о�
 const OFFICIAL_SOURCE_PREFIX = "Повні деталі — на ";
 const OFFICIAL_SOURCE_LABEL = "офіційному сайті";
 const OFFICIAL_SOURCE_SUFFIX = ".";
-// Non-official sources attribute via a "Джерело: <name>" line (see gemini.source_line);
-// the source name is turned into a link to the original post.
+// Source metadata is admin-only: the moderation card already names the source and
+// carries its URL, so a public post does not repeat it. The wiki "Чи знали ви?"
+// rubric is the one exception — its CC BY-SA licence requires the credit to travel
+// with the text — and it attributes via a "Джерело: <name>" line (gemini.source_line)
+// whose source name is turned into a link to the original page. The official site
+// keeps its own "Повні деталі — на офіційному сайті." reader link, which is a
+// call-to-action rather than a source label, and is left alone.
 const GENERIC_SOURCE_PREFIX = "Джерело:";
+// Label prefixes that mark a whole line as source metadata, in any post that is
+// not allowed to name its source publicly.
+const SOURCE_LINE_PREFIXES = [GENERIC_SOURCE_PREFIX.toLowerCase(), "source:"];
+export const PUBLIC_SOURCE_ATTRIBUTION_TYPES = new Set(["wiki_facts"]);
 // Footer link copy and URLs both live in locales/uk.json under post_footer.links.
 export const FOOTER_LINK_KEYS = [
   "post_footer.links.chat",
@@ -49,9 +58,10 @@ export function formatCommunityFooterHtml() {
 
 export function formatPostHtml(
   text,
-  { source_url = null, allow_source_link = false, include_community_footer = false } = {},
+  { source_url = null, allow_source_link = false, include_community_footer = false, source_type = null } = {},
 ) {
-  const body = prepareBodyText(text, include_community_footer);
+  const publicText = hidesSourceAttribution(source_type) ? stripPublicSourceAttribution(text) : text;
+  const body = prepareBodyText(publicText, include_community_footer);
   const renderedBody = formatBodyHtml(body, {
     sourceUrl: source_url,
     allowSourceLink: allow_source_link,
@@ -71,6 +81,48 @@ export function formatPostHtml(
  */
 export function submissionAllowsSourceLink(part) {
   return Boolean(String(part?.source_type ?? "").trim()) && Boolean(String(part?.source_url ?? "").trim());
+}
+
+/**
+ * Whether a collector's posts may name their source in the public text.
+ *
+ * Only the wiki rubric may, because CC BY-SA demands it. User submissions (no
+ * source type) are never touched — their text is the author's own.
+ */
+export function allowsPublicSourceAttribution(sourceType) {
+  return PUBLIC_SOURCE_ATTRIBUTION_TYPES.has(String(sourceType ?? "").trim());
+}
+
+/**
+ * Drop whole "Джерело: <name>" / "Source: <name>" lines from a public post.
+ *
+ * Applied at render time as well as at draft time, so drafts queued before the
+ * source line was made admin-only — and any line the model slips in despite the
+ * prompt — never reach the channel. Only a line that IS the label is removed; an
+ * inline mention inside a sentence is left alone.
+ */
+export function stripPublicSourceAttribution(text) {
+  const lines = String(text ?? "").split("\n");
+  const kept = lines.filter((line) => !isSourceLabelLine(line));
+  if (kept.length === lines.length) {
+    return String(text ?? "");
+  }
+
+  return collapseBlankRuns(kept.join("\n")).trim();
+}
+
+function hidesSourceAttribution(sourceType) {
+  const normalized = String(sourceType ?? "").trim();
+  return Boolean(normalized) && !allowsPublicSourceAttribution(normalized);
+}
+
+function isSourceLabelLine(line) {
+  const lowered = line.trim().toLowerCase();
+  return SOURCE_LINE_PREFIXES.some((prefix) => lowered.startsWith(prefix));
+}
+
+function collapseBlankRuns(text) {
+  return text.replace(/\n{3,}/g, "\n\n");
 }
 
 /**

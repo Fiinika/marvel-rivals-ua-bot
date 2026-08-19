@@ -134,6 +134,14 @@ export function loadConfig(env = process.env) {
   const youtubeExcludeKeywords = parseKeywordSet(env, "YOUTUBE_EXCLUDE_KEYWORDS", DEFAULT_YOUTUBE_EXCLUDE_KEYWORDS);
   const enableYoutubeVideoDownload = optionalBool(env, "ENABLE_YOUTUBE_VIDEO_DOWNLOAD", true);
   const youtubeVideoMaxMb = optionalLenientNonNegativeInt(env, "YOUTUBE_VIDEO_MAX_MB", 48) || 48;
+  // From a datacenter IP YouTube refuses a plain download ("Video is login
+  // required") on every client; a Proof-of-Origin token is what reopens the
+  // WEB/MWEB path. Minting one costs a BotGuard run per session, so it can be
+  // turned off on a host that does not need it.
+  const enableYoutubePoToken = optionalBool(env, "ENABLE_YOUTUBE_PO_TOKEN", true);
+  // Last resort for an IP that YouTube blocks even with a token: the Cookie
+  // header of a throwaway Google account. Empty means anonymous.
+  const youtubeCookie = (env.YOUTUBE_COOKIE ?? "").trim();
 
   const enableRedditSource = optionalBool(env, "ENABLE_REDDIT_SOURCE", false);
   const redditSubreddit = (env.REDDIT_SUBREDDIT ?? DEFAULT_REDDIT_SUBREDDIT).trim() || DEFAULT_REDDIT_SUBREDDIT;
@@ -203,6 +211,8 @@ export function loadConfig(env = process.env) {
     youtube_exclude_keywords: youtubeExcludeKeywords,
     enable_youtube_video_download: enableYoutubeVideoDownload,
     youtube_video_max_mb: youtubeVideoMaxMb,
+    enable_youtube_po_token: enableYoutubePoToken,
+    youtube_cookie: youtubeCookie,
     enable_reddit_source: enableRedditSource,
     reddit_subreddit: redditSubreddit,
     reddit_flairs: redditFlairs,

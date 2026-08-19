@@ -20,7 +20,7 @@ Every source except the official site is opt-in and off by default.
 - a fan-art digest — the week's top `r/MarvelRivals` art as one credited Telegram album
 - the "Чи знали ви?" trivia rubric — one wiki fact, translated to Ukrainian, credited CC BY-SA
 
-**Accepts manual user submissions** — plain text, links, photos, videos, and documents with optional captions — rate-limited per user and filtered for too-short throwaway messages.
+**Accepts manual user submissions** — plain text, links, photos, videos, and documents with optional captions, and whole albums (a media group becomes one submission, not one per photo) — rate-limited per user and filtered for too-short throwaway messages.
 
 **Moderates everything in one queue:**
 
@@ -32,7 +32,7 @@ Every source except the official site is opt-in and off by default.
 
 **Avoids duplicates twice over:** every source tracks what it has already seen, and an optional Gemini check drops an item that retells a story another source already delivered.
 
-**Handles media properly:** article cover photos, multi-image posts as Telegram albums, and YouTube/Bluesky videos downloaded and re-uploaded so they play inline instead of appearing as a link.
+**Handles media properly:** article cover photos, multi-image posts as Telegram albums (photo and video in the same group), and YouTube/Bluesky videos downloaded and re-uploaded so they play inline instead of appearing as a link.
 
 **Moderates the community chat** on Telegram (anti-flood, invite/scam/bad-word filters, warnings with auto-mutes, reports, welcome messages) and optionally on Discord.
 
@@ -96,6 +96,7 @@ services/
   urlutils.js                urlsplit/urljoin with urllib semantics
   xml.js                     feed parsing with DTDs and entities refused
   youtube_video.js           InnerTube download for native video re-upload
+  youtube_po_token.js        BotGuard/PO token so a server IP may download at all
 prompts/
   gemini_news_uk.md          long-form official article draft
   gemini_shortform_uk.md     concise social/leak posts
@@ -219,7 +220,8 @@ npm install
 That is the whole toolchain. There is no native build step (the database is
 Node's built-in `node:sqlite`) and no external executable to install — native
 YouTube video re-upload runs on `youtubei.js`, a JavaScript client for
-YouTube's private InnerTube API.
+YouTube's private InnerTube API, with `bgutils-js` and `jsdom` for the
+Proof-of-Origin token a server IP needs.
 
 ## Create `.env`
 
@@ -321,6 +323,8 @@ FANART_DIGEST_COUNT=10
 - `YOUTUBE_CHANNEL_ID` — default `UCWzmOSSiSPbVnVu3ZAyDx2w`, the official @MarvelRivals channel.
 - `YOUTUBE_EXCLUDE_KEYWORDS` — a comma-separated title blocklist, matched case-insensitively as substrings. Left empty it keeps the built-in esports-VOD list (`grand final`, `group stage`, `playoff`, `qualifier`, `invitational`, `highlights`, `esports`). Any value you set **replaces** that list; `-` or `none` disables filtering.
 - `ENABLE_YOUTUBE_VIDEO_DOWNLOAD` (**on by default**) — downloads the video and re-uploads it natively, up to `YOUTUBE_VIDEO_MAX_MB` (default `48`). Off, too large, or refused by YouTube, the post falls back to a large playable link preview.
+- `ENABLE_YOUTUBE_PO_TOKEN` (**on by default**) — mints a Proof-of-Origin token for the InnerTube session. From a datacenter IP YouTube answers a plain download with "Video is login required" on every client, while the same video downloads fine from a home connection; the token is what the real web player sends to prove the request is genuine, and it reopens the `WEB`/`MWEB` download path on a server. Minting it costs one BotGuard run per session.
+- `YOUTUBE_COOKIE` — last resort for an IP YouTube blocks even with a token: the `Cookie` header of a **throwaway** Google account. Empty (the default) means anonymous. It is a full credential, so never use a personal account.
 - `REDDIT_SUBREDDIT` — without the `r/` prefix, default `MarvelRivalsLeaks`.
 - `REDDIT_FLAIRS` — comma-separated flairs combined with `OR` into one search query. Empty keeps the default `Official News,Reliable,Confirmed`.
 - `REDDIT_EXCLUDE_KEYWORDS` — title blocklist, default `megathread` (recurring sticky threads). `-` or `none` disables it.
@@ -366,18 +370,20 @@ Six sources are registered in `services/collectors/registry.js`. Each is a `Base
 
 | Source | Enabled by | What it brings | Media |
 | --- | --- | --- | --- |
-| Official site | always on | patch notes, announcements, events | cover photo |
+| Official site | always on | patch notes, announcements, events | cover photo, album of up to 4 article images |
 | Bluesky | `ENABLE_BLUESKY_SOURCE` | short official announcements | photos, album, native video |
 | YouTube | `ENABLE_YOUTUBE_SOURCE` | trailers and reveals | native video, else playable preview |
 | Reddit leaks | `ENABLE_REDDIT_SOURCE` | datamines, framed as rumours | photo |
-| RivalSkins | `ENABLE_RIVALSKINS_SOURCE` | upcoming skin renders, rumours | photo |
+| RivalSkins | `ENABLE_RIVALSKINS_SOURCE` | upcoming skin renders, rumours | photo, album of the post's renders |
 | Wiki facts | `ENABLE_WIKI_FACTS` | weekly "Чи знали ви?" trivia | text only |
 
 Reddit and RivalSkins are the only rumour-framed sources: Gemini is explicitly told to present the item as an unofficial leak that developers have not confirmed, so a datamine never reads like an announcement.
 
-The official news collector reads `OFFICIAL_NEWS_URL`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and a safe cover image when available, then asks Gemini for a Ukrainian Telegram-ready draft. Official drafts are intentionally concise, usually one moderation post around 400-900 characters, so a long article does not become a noisy 6-10 part moderation batch.
+A RivalSkins post usually carries every render of the skin, and its images publish as one album. What it also carries is the promo of the moment — the season roadmap, a Twitch-drop banner — repeated at the bottom of most posts, which would otherwise put the same picture under every leak. Rather than hardcoding filenames that die with the season, the fetcher drops any image that appears in more than one post of the same fetch: a render belongs to exactly one post, so recurrence across the feed is what separates content from boilerplate.
 
-The generated public draft includes only publishable post content and hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata. Public posts do not show raw source URLs. Official articles are attributed as `Повні деталі — на офіційному сайті.`, where `офіційному сайті` links to the stored `source_url`; every other source uses a `Джерело: <name>` line linked to the original post.
+The official news collector reads `OFFICIAL_NEWS_URL`, extracts recent article cards, fetches individual article pages, parses the title, canonical URL, date, article text, and up to four safe article images when available, then asks Gemini for a Ukrainian Telegram-ready draft. Official drafts are intentionally concise, usually one moderation post around 400-900 characters, so a long article does not become a noisy 6-10 part moderation batch.
+
+The generated public draft includes only publishable post content and hashtags. Publication date, source type, article title, status, and raw `source_url` are admin-only metadata — the moderation card names the source and carries its URL, and the post itself does not repeat them. Public posts do not show raw source URLs, and carry no `Джерело: <name>` line: it is stripped both when the draft is generated and again when a post is rendered, so drafts queued before that rule — and any line the model adds despite the prompt — never reach the channel. Two attributions survive on purpose: official articles end with `Повні деталі — на офіційному сайті.`, where `офіційному сайті` links to the stored `source_url`, and the wiki rubric keeps its `Джерело: Marvel Rivals Wiki (CC BY-SA)` credit, which its licence requires. A user's own submission is never touched, whatever it says.
 
 ### Links inside a post
 
@@ -492,10 +498,16 @@ The official site is photo-only: the parser prefers Open Graph images, Twitter c
 
 The other sources go further:
 
-- **Albums.** A single-part draft with two or more photos — a Bluesky post with several infographics, or the fan-art digest — becomes one Telegram media group. Album images are downloaded and re-uploaded as bytes rather than sent by URL, because Telegram refuses by-URL photos above roughly 5 MB while a bytes upload allows 10 MB. Images are capped at 10 MiB and must be JPEG, PNG, or WebP. A media group is atomic, so if Telegram rejects one item the publisher drops that image and retries with the rest.
+- **Albums.** A single-part draft with two or more photos — a Bluesky post with several infographics, an official article with several images, a RivalSkins leak showing the skin from several angles, or the fan-art digest — becomes one Telegram media group. Collector album images are downloaded and re-uploaded as bytes rather than sent by URL, because Telegram refuses by-URL photos above roughly 5 MB while a bytes upload allows 10 MB. Images are capped at 10 MiB and must be JPEG, PNG, or WebP. A media group is atomic, so if Telegram rejects one item the publisher drops that image and retries with the rest.
+
+  A reader's own album arrives differently: Telegram has no "album finished" update, so its items appear as separate messages that share only a `media_group_id`. The submission handler collects them for a short window (2.5 s, restarted by each new item) and stores ONE submission with a part per item — otherwise five photos became five queue entries, five moderation cards and five single-photo posts. Those items carry a Telegram `file_id`, so publishing sends them straight back with no download and no size limit, and each keeps its own type: a photo-and-video group publishes as one mixed media group rather than losing the video.
 - **Native video.** YouTube videos are downloaded through YouTube's own InnerTube API with `youtubei.js` (progressive MP4 only, so no ffmpeg is needed) and Bluesky videos are fetched as their original uploaded MP4. Both are re-uploaded so they play inline. Above the configured MB cap, or if the download or upload fails, the post falls back to text: a YouTube post keeps its large playable link preview, while a Bluesky video post degrades to plain text with previews disabled.
 
-  The stream URL is scrambled by a function inside YouTube's player script. `services/youtube_video.js` runs that function in a `node:vm` realm whose global object is empty — no `process`, no `require`, no `fetch` — with a hard timeout, so third-party script has nothing to reach the bot token or the database with. It also prefers YouTube's app clients, because the `WEB` client now demands a Proof-of-Origin token and answers 403 without one. If YouTube tightens that further, the download simply fails and the post degrades to the link preview.
+  The stream URL is scrambled by a function inside YouTube's player script. `services/youtube_video.js` runs that function in a `node:vm` realm whose global object is empty — no `process`, no `require`, no `fetch` — with a hard timeout, so third-party script has nothing to reach the bot token or the database with.
+
+  Where the bot runs decides whether a download is possible at all. From a home connection the app clients (`ANDROID` first) hand back a progressive MP4 with no ceremony. From a datacenter IP — any VPS — YouTube answers every client with "Video is login required", which is why a server that works in development can publish nothing but link previews. `services/youtube_po_token.js` mints a Proof-of-Origin token for the session, which reopens the `WEB`/`MWEB` path; the client order is `ANDROID`, `WEB`, `MWEB`, `IOS`, `TV_EMBEDDED` so both cases are covered. Minting means running Google's BotGuard, obfuscated third-party code that expects a browser, so it runs inside a jsdom window — a separate realm with no `process`, `require` or `fetch` — and only strings and byte arrays cross back. The token is bound to the session's visitor data and the client is rebuilt every six hours so it cannot go stale. Every failure degrades to a token-less download, and then to the link preview.
+
+  Live streams and Post-Live-DVR videos are never downloadable: YouTube serves them as five-second segments that need ffmpeg to stitch, so an esports broadcast always publishes as a playable preview no matter how the token negotiation goes.
 - **Moderation shows the real thing.** Albums and native videos are previewed in the moderation chat exactly as they will be published, so an admin approves what actually goes out. The cost is that a video is downloaded twice — once for the preview, once for publishing.
 
 Album posts, YouTube posts, and downloaded-video posts cannot be edited from moderation — there is no text message to edit — so they are approved or rejected as a whole. Every other post type is editable as usual.
@@ -803,6 +815,7 @@ bot behaves exactly as before.
 - The official news site is parsed for photos only; video comes from Bluesky and YouTube instead.
 - Every AI feature depends on one Gemini API key. Without it the collectors still fetch and count items but produce no drafts, and the trivia rubric does not run at all.
 - Album, YouTube, and downloaded-video posts cannot be edited from moderation — only approved or rejected.
+- A reader's album is grouped in memory while its items arrive, so a restart in that 2.5 second window leaves the pieces unqueued; the album has to be sent again.
 - A YouTube or Bluesky video is downloaded twice, once for the moderation preview and once for publishing.
 - Reddit rate-limits hard, so each Reddit-backed feed is fetched at most once per run.
 - User submissions are rate-limited per Telegram user ID using the latest saved submission timestamp.

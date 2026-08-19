@@ -8,13 +8,16 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import {
   albumCaptionHtml,
+  albumItems,
   downloadAlbumPhoto,
   downloadExternalVideo,
   failingMediaIndex,
   isFetchableMediaUrl,
   linkPreviewOptionsFor,
   needsExternalVideoDownload,
+  sendAlbumMessage,
 } from "../services/publisher.js";
+import { fakeBot } from "./helpers/telegram.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -59,14 +62,15 @@ it("passes a pre-rendered album caption through and formats the rest", () => {
   const raw = albumCaptionHtml({ source_type: "reddit_fanart", draft_text: '<a href="u">x</a>' });
   expect(raw).toBe('<a href="u">x</a>');
 
-  // Collector-album captions are plain text formatted through the post formatter
-  // (the "Джерело:" line is linkified, the body escaped).
+  // Collector-album captions are plain text formatted through the post formatter,
+  // which escapes the body and drops the admin-only "Джерело:" line.
   const formatted = albumCaptionHtml({
     source_type: "bluesky",
     draft_text: "Текст.\n\nДжерело: MR",
     source_url: "https://x",
   });
-  expect(formatted).toContain('<a href="https://x">MR</a>');
+  expect(formatted).toContain("Текст.");
+  expect(formatted).not.toContain("Джерело");
 });
 
 it("parses the message number Telegram blames", () => {
@@ -201,4 +205,59 @@ it("rejects a non-video content type", async () => {
   stubFetch({ contentType: "text/html", body: "<html>" });
 
   expect(await downloadExternalVideo("https://pds.host.bsky.network/x", { maxBytes: 10_000_000 })).toBeNull();
+});
+
+
+// --- albums of Telegram files (a reader's own media group) ------------------------
+
+it("reads file ids and media types off the parts", () => {
+  const items = albumItems({
+    message_type: "album",
+    parts: [
+      { file_id: "p1", media_type: "photo" },
+      { file_id: "v1", media_type: "video" },
+      { file_id: "p1", media_type: "photo" }, // the same file twice
+    ],
+  });
+
+  expect(items).toEqual([
+    { file_id: "p1", media_url: null, media_type: "photo" },
+    { file_id: "v1", media_url: null, media_type: "video" },
+  ]);
+});
+
+it("sends a photo-and-video album as one media group without fetching anything", async () => {
+  // Telegram already holds these files, so a file_id is passed straight through:
+  // no download, no size limit, and the video keeps its type instead of being
+  // sent as a photo (which Telegram rejects for an MP4).
+  const fetchCalls = stubFetch({ contentType: "image/jpeg" });
+  const bot = fakeBot();
+
+  await sendAlbumMessage(
+    bot,
+    42,
+    [
+      { file_id: "p1", media_type: "photo" },
+      { file_id: "v1", media_type: "video" },
+    ],
+    "підпис",
+  );
+
+  expect(fetchCalls).toEqual([]);
+  const [group] = bot.callsTo("sendMediaGroup");
+  expect(group.args[1]).toEqual([
+    { type: "photo", media: "p1", caption: "підпис", parse_mode: "HTML" },
+    { type: "video", media: "v1" },
+  ]);
+});
+
+it("sends a single surviving item as a plain message of its own type", async () => {
+  const bot = fakeBot();
+
+  await sendAlbumMessage(bot, 42, [{ file_id: "v1", media_type: "video" }], "підпис");
+
+  expect(bot.callsTo("sendMediaGroup")).toEqual([]);
+  const [video] = bot.callsTo("sendVideo");
+  expect(video.args[1]).toBe("v1");
+  expect(video.args[2]).toMatchObject({ caption: "підпис", supports_streaming: true });
 });

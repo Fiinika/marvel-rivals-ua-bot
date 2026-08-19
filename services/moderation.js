@@ -9,7 +9,7 @@ import {
   PREVIEW_LINK_SOURCE_TYPES,
   TELEGRAM_CAPTION_LIMIT,
   albumCaptionHtml,
-  albumImageUrls,
+  albumItems,
   linkPreviewOptionsFor,
   needsExternalVideoDownload,
   sendAlbumMessage,
@@ -120,10 +120,10 @@ async function sendSubmissionPartsToModeration(bot, config, db, submission) {
  * caption (with footer/links) that will be published.
  */
 async function sendAlbumToModeration(bot, config, submission) {
-  const images = albumImageUrls(submission);
+  const items = albumItems(submission);
   const caption = albumCaptionHtml(submission);
   try {
-    await sendAlbumMessage(bot, config.admin_chat_id, images, caption);
+    await sendAlbumMessage(bot, config.admin_chat_id, items, caption);
   } catch (error) {
     if (!isTelegramSendFailure(error)) {
       throw error;
@@ -155,6 +155,8 @@ async function sendPartMessage(bot, config, chatId, part) {
       parseMode: "HTML",
       linkPreview: linkPreviewOptionsFor(part),
       maxBytes: Math.max(1, config.youtube_video_max_mb) * 1024 * 1024,
+      cookie: config.youtube_cookie,
+      usePoToken: config.enable_youtube_po_token,
     });
     if (sent !== null && sent !== undefined) {
       return sentModerationPart(sent.message_id);
@@ -274,6 +276,7 @@ async function sendMediaPart(
 function formatPartForModeration(text, part) {
   return formatPostHtml(text, {
     source_url: String(part.source_url || ""),
+    source_type: part.source_type,
     allow_source_link: submissionAllowsSourceLink(part),
     include_community_footer: true,
   });

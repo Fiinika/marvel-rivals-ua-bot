@@ -69,6 +69,7 @@ export function messageUpdate({
   video = undefined,
   document = undefined,
   newChatMembers = undefined,
+  mediaGroupId = undefined,
   messageId = null,
 } = {}) {
   const message = {
@@ -82,6 +83,7 @@ export function messageUpdate({
   if (photo) message.photo = photo;
   if (video) message.video = video;
   if (document) message.document = document;
+  if (mediaGroupId) message.media_group_id = mediaGroupId;
   if (newChatMembers) message.new_chat_members = newChatMembers;
   if (replyToMessage) message.reply_to_message = replyToMessage;
   if (senderChat) message.sender_chat = senderChat;

@@ -91,15 +91,28 @@ it("downloads a video and names it after the title", async () => {
 });
 
 it("falls through to the next client when one has no progressive stream", async () => {
-  // The WEB client now needs a Proof-of-Origin token; the app clients still serve
-  // a muxed MP4, so a failure on one must not end the attempt.
+  // The app clients serve a muxed MP4 to a home connection; from a datacenter IP
+  // they answer "login required" and only WEB/MWEB accept the PO token, so those
+  // must be tried before giving up.
   const calls = [];
   setClient(stubClient({ streams: { TV_EMBEDDED: [[9, 9]] }, calls }));
 
   const result = await downloadYoutubeVideo(URL_UNDER_TEST, { maxBytes: 1_000_000 });
 
-  expect(calls).toEqual(["ANDROID", "IOS", "TV_EMBEDDED"]);
+  expect(calls).toEqual(["ANDROID", "WEB", "MWEB", "IOS", "TV_EMBEDDED"]);
   expect([...result.data]).toEqual([9, 9]);
+});
+
+it("tries the PO-token clients right after the app ones", async () => {
+  // Order matters on a server: ANDROID fails there, and WEB is what the token
+  // reopens, so it must come before the clients the token does nothing for.
+  const calls = [];
+  setClient(stubClient({ streams: { WEB: [[7]] }, calls }));
+
+  const result = await downloadYoutubeVideo(URL_UNDER_TEST, { maxBytes: 1_000_000 });
+
+  expect(calls).toEqual(["ANDROID", "WEB"]);
+  expect([...result.data]).toEqual([7]);
 });
 
 it("returns null when no client can serve the video", async () => {

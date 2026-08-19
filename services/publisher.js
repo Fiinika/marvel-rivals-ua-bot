@@ -110,10 +110,10 @@ export async function publishSubmission(bot, config, submission) {
 }
 
 async function publishAlbum(bot, config, submission) {
-  const images = albumImageUrls(submission);
+  const items = albumItems(submission);
   const caption = albumCaptionHtml(submission);
   try {
-    await sendAlbumMessage(bot, config.publish_chat_id, images, caption);
+    await sendAlbumMessage(bot, config.publish_chat_id, items, caption);
   } catch (error) {
     if (error instanceof PublishingError) {
       throw error;
@@ -136,6 +136,8 @@ async function publishTextOrYoutubeVideo(bot, config, submission, text, { parseM
       parseMode,
       linkPreview,
       maxBytes: Math.max(1, config.youtube_video_max_mb) * 1024 * 1024,
+      cookie: config.youtube_cookie,
+      usePoToken: config.enable_youtube_po_token,
     });
     return;
   }
@@ -245,8 +247,14 @@ export async function sendDownloadedVideoPost(bot, chatId, videoUrl, caption, { 
  * unavailable, too large, or the upload is rejected. Returns the primary sent
  * message so callers (moderation) can record it.
  */
-export async function sendYoutubePost(bot, chatId, sourceUrl, caption, { parseMode, linkPreview, maxBytes }) {
-  const video = await downloadYoutubeVideo(sourceUrl, { maxBytes });
+export async function sendYoutubePost(
+  bot,
+  chatId,
+  sourceUrl,
+  caption,
+  { parseMode, linkPreview, maxBytes, cookie = "", usePoToken = true },
+) {
+  const video = await downloadYoutubeVideo(sourceUrl, { maxBytes, cookie, usePoToken });
   if (video !== null) {
     try {
       return await sendVideoBytes(bot, chatId, video.data, video.filename, caption, { parseMode });
@@ -322,43 +330,78 @@ function isSafeHttpUrl(value) {
 }
 
 /**
- * The de-duplicated image URLs of an `album` submission (one per part), capped
- * at Telegram's media-group maximum of 10.
+ * The de-duplicated media of an `album` submission (one item per part), capped at
+ * Telegram's media-group maximum of 10.
+ *
+ * An item is either a Telegram `file_id` — what a reader's own album carries, and
+ * what Telegram can re-send untouched — or a URL the bot downloads and uploads as
+ * bytes, which is how collector albums arrive. `media_type` travels with it, so a
+ * photo-and-video group publishes as one post rather than losing the video.
  */
-export function albumImageUrls(submission) {
-  const urls = [];
+export function albumItems(submission) {
+  const items = [];
   const seen = new Set();
   for (const part of submission.parts ?? []) {
-    const url = String(part.media_url || "").trim();
-    if (url && !seen.has(url)) {
-      seen.add(url);
-      urls.push(url);
+    const item = albumItemOf(part);
+    if (item === null || seen.has(albumItemKey(item))) {
+      continue;
+    }
+    seen.add(albumItemKey(item));
+    items.push(item);
+  }
+  if (!items.length) {
+    const single = albumItemOf(submission);
+    if (single !== null) {
+      items.push(single);
     }
   }
-  if (!urls.length) {
-    const single = String(submission.media_url || "").trim();
-    if (single) {
-      urls.push(single);
-    }
+  return items.slice(0, 10);
+}
+
+function albumItemOf(part) {
+  const fileId = String(part?.file_id || "").trim();
+  const mediaUrl = String(part?.media_url || "").trim();
+  if (!fileId && !mediaUrl) {
+    return null;
   }
-  return urls.slice(0, 10);
+  return { file_id: fileId || null, media_url: mediaUrl || null, media_type: albumMediaType(part) };
+}
+
+function albumItemKey(item) {
+  return item.file_id ?? item.media_url;
 }
 
 /**
- * Send an image album to `chatId`. Images are downloaded and uploaded as bytes
- * (unreachable / non-image / oversized ones are skipped). A media group needs
- * 2-10 items, so a single usable image is sent as a plain photo. The caption
- * rides on the first item when it fits Telegram's 1024 limit, otherwise it
- * follows as a separate text message.
+ * The media-group type for a part. Anything that is not explicitly a video or a
+ * document is sent as a photo — the type collector albums have always used.
  */
-export async function sendAlbumMessage(bot, chatId, images, caption, { parseMode = "HTML" } = {}) {
-  if (!images.length) {
-    throw new PublishingError("Album submission has no images");
+function albumMediaType(part) {
+  const declared = String(part?.media_type || part?.message_type || "").toLowerCase();
+  if (declared === "video" || declared === "document") {
+    return declared;
+  }
+  return "photo";
+}
+
+/**
+ * Send an album to `chatId`.
+ *
+ * Items given as a Telegram `file_id` are sent as they are; items given as a URL
+ * are downloaded and uploaded as bytes, and an unreachable / non-image /
+ * oversized one is skipped. A media group needs 2-10 items, so a single survivor
+ * is sent as a plain message of its own type. The caption rides on the first item
+ * when it fits Telegram's 1024 limit, otherwise it follows as a separate text
+ * message.
+ */
+export async function sendAlbumMessage(bot, chatId, items, caption, { parseMode = "HTML" } = {}) {
+  const normalized = items.map(normalizeAlbumItem);
+  if (!normalized.length) {
+    throw new PublishingError("Album submission has no media");
   }
 
-  const photos = await downloadAlbumPhotos(images);
-  if (!photos.length) {
-    throw new PublishingError("None of the album images could be downloaded as valid photos");
+  const media = await resolveAlbumMedia(normalized);
+  if (!media.length) {
+    throw new PublishingError("None of the album media could be prepared for upload");
   }
 
   const trimmedCaption = caption.trim();
@@ -369,21 +412,11 @@ export async function sendAlbumMessage(bot, chatId, images, caption, { parseMode
   // dimensions, which the size/content-type guard can't catch), the whole send
   // fails. So drop the offending item (Telegram names it as "message #N") and
   // retry, rather than losing the entire album.
-  const remaining = [...photos];
+  const remaining = [...media];
   while (remaining.length) {
     try {
       if (remaining.length === 1) {
-        const [data, filename] = remaining[0];
-        await sendWithRetries(
-          (signal) =>
-            bot.api.sendPhoto(
-              chatId,
-              new InputFile(data, filename),
-              captionFits ? { caption: trimmedCaption, parse_mode: parseMode } : {},
-              signal,
-            ),
-          { label: "publish album single photo" },
-        );
+        await sendSingleAlbumItem(bot, chatId, remaining[0], trimmedCaption, { captionFits, parseMode });
       } else {
         await sendWithRetries(
           (signal) =>
@@ -404,11 +437,11 @@ export async function sendAlbumMessage(bot, chatId, images, caption, { parseMode
       const index = failingMediaIndex(telegramErrorText(error), remaining.length);
       const [dropped] = remaining.splice(index, 1);
       logger.warning(
-        `Telegram rejected album image ${dropped[1]} (${errorText(error)}); ` +
+        `Telegram rejected album item ${dropped.label} (${errorText(error)}); ` +
           `dropping it and retrying with ${remaining.length} left.`,
       );
       if (!remaining.length) {
-        throw new PublishingError("Every album image was rejected by Telegram", { cause: error });
+        throw new PublishingError("Every album item was rejected by Telegram", { cause: error });
       }
     }
   }
@@ -419,14 +452,68 @@ export async function sendAlbumMessage(bot, chatId, images, caption, { parseMode
   }
 }
 
-function buildAlbumMedia(photos, caption, { captionFits, parseMode }) {
-  return photos.map(([data, filename], index) => {
-    const file = new InputFile(data, filename);
+function buildAlbumMedia(media, caption, { captionFits, parseMode }) {
+  return media.map((item, index) => {
     if (index === 0 && captionFits) {
-      return { type: "photo", media: file, caption, parse_mode: parseMode };
+      return { type: item.type, media: item.media, caption, parse_mode: parseMode };
     }
-    return { type: "photo", media: file };
+    return { type: item.type, media: item.media };
   });
+}
+
+/**
+ * A media group needs 2-10 items, so a lone survivor is sent as a plain
+ * photo/video/document instead — with the caption attached when it fits.
+ */
+async function sendSingleAlbumItem(bot, chatId, item, caption, { captionFits, parseMode }) {
+  const options = {
+    ...(captionFits ? { caption, parse_mode: parseMode } : {}),
+    ...(item.type === "video" ? { supports_streaming: true } : {}),
+  };
+  const send = { photo: sendPhoto, video: sendVideo, document: sendDocument }[item.type](bot);
+  return sendWithRetries((signal) => send(chatId, item.media, options, signal), {
+    label: `publish album single ${item.type}`,
+  });
+}
+
+/** A plain string item is a photo URL — the shape collector albums have always used. */
+function normalizeAlbumItem(item) {
+  if (typeof item === "string") {
+    return { file_id: null, media_url: item, media_type: "photo" };
+  }
+  return {
+    file_id: item?.file_id ?? null,
+    media_url: item?.media_url ?? null,
+    media_type: albumMediaType(item),
+  };
+}
+
+/**
+ * Turn album items into what `sendMediaGroup` takes.
+ *
+ * A `file_id` is passed through — Telegram already holds the file, so there is
+ * nothing to fetch and no size limit to hit. A URL is downloaded and uploaded as
+ * bytes: Telegram refuses by-URL photos over roughly 5 MB, and an unreachable or
+ * non-image URL is dropped here rather than failing the whole atomic group.
+ * URL items are always photos; the only URL videos the bot publishes (Bluesky)
+ * are single-video posts, not albums.
+ */
+async function resolveAlbumMedia(items) {
+  const media = [];
+  for (const item of items) {
+    if (item.file_id) {
+      media.push({ type: item.media_type, media: item.file_id, label: item.file_id.slice(0, 12) });
+      continue;
+    }
+
+    const photo = await downloadAlbumPhoto(item.media_url, media.length);
+    if (photo === null) {
+      continue;
+    }
+    const [data, filename] = photo;
+    media.push({ type: "photo", media: new InputFile(data, filename), label: filename });
+  }
+  return media;
 }
 
 /**
@@ -504,19 +591,6 @@ function isGlobalIp(host, version) {
   return true;
 }
 
-async function downloadAlbumPhotos(images) {
-  const photos = [];
-  // redirect "manual" so an allowlisted-looking URL cannot 302 to an internal
-  // host — the redirect target would otherwise be an unchecked SSRF target.
-  for (let index = 0; index < images.length; index += 1) {
-    const photo = await downloadAlbumPhoto(images[index], index);
-    if (photo !== null) {
-      photos.push(photo);
-    }
-  }
-  return photos;
-}
-
 /**
  * Download and validate one album image.
  *
@@ -535,6 +609,8 @@ export async function downloadAlbumPhoto(url, index, { maxBytes = ALBUM_MAX_IMAG
     // Stream so an oversized body is aborted mid-download instead of being fully
     // buffered into memory first (a non-image internal/huge response otherwise
     // costs up to its full size in RAM before the post-hoc length check).
+    // redirect "manual" so an allowlisted-looking URL cannot 302 to an internal
+    // host — the redirect target would otherwise be an unchecked SSRF target.
     const response = await fetch(url, {
       redirect: "manual",
       headers: { "User-Agent": ALBUM_IMAGE_USER_AGENT },
@@ -616,6 +692,7 @@ function submissionParts(submission) {
 function formatPartText(text, submission) {
   return formatPostHtml(text, {
     source_url: String(submission.source_url || ""),
+    source_type: submission.source_type,
     allow_source_link: submissionAllowsSourceLink(submission),
     include_community_footer: true,
   });

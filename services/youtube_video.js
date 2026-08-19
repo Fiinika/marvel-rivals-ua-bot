@@ -34,11 +34,18 @@ import { urlsplit } from "./urlutils.js";
 const logger = getLogger("services.youtube_video");
 
 /**
- * Clients to try, in order. `ANDROID` is first because it is the one that still
- * hands back a progressive MP4 without a Proof-of-Origin token; the rest are
- * kept as fallbacks for the day that changes.
+ * Clients to try, in order. `ANDROID` is first because it hands back a
+ * progressive MP4 with no Proof-of-Origin token at all — which is enough from a
+ * home connection. From a datacenter IP YouTube answers every client with "Video
+ * is login required", and only WEB/MWEB accept a PO token as proof the request
+ * is genuine, so those come next.
  */
-const CLIENT_PREFERENCE = ["ANDROID", "IOS", "TV_EMBEDDED", "WEB"];
+const CLIENT_PREFERENCE = ["ANDROID", "WEB", "MWEB", "IOS", "TV_EMBEDDED"];
+
+// The integrity token behind a PO token is good for ~12h. The client (and with
+// it the token) is rebuilt well inside that, so a bot that has been up for days
+// never sends a stale one.
+const PO_TOKEN_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 // Progressive (combined audio+video) MP4 only — no ffmpeg merge required.
 const FORMAT_OPTIONS = Object.freeze({ type: "video+audio", quality: "best", format: "mp4" });
@@ -48,13 +55,17 @@ const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const PLAYER_EVAL_TIMEOUT_MS = 5000;
 
 let clientPromise = null;
+let clientBuiltAt = 0;
 let evaluatorInstalled = false;
 
 /**
  * Return `{data, filename}` for `url` within `maxBytes`, or null when the video
  * is unavailable, too large, or the download fails.
+ *
+ * `cookie` (optional) is a Google cookie header, for the case where even a PO
+ * token is not enough for the server's IP; `usePoToken` turns the token off.
  */
-export async function downloadYoutubeVideo(url, { maxBytes }) {
+export async function downloadYoutubeVideo(url, { maxBytes, cookie = "", usePoToken = true }) {
   if (!url || !url.trim()) {
     return null;
   }
@@ -67,7 +78,7 @@ export async function downloadYoutubeVideo(url, { maxBytes }) {
 
   let client;
   try {
-    client = await getClient();
+    client = await getClient({ cookie, usePoToken });
   } catch (error) {
     logger.warning(`Could not start the YouTube client; cannot download ${url}: ${errorText(error)}`);
     return null;
@@ -158,13 +169,21 @@ async function videoTitle(client, videoId, clientName) {
 /**
  * The shared InnerTube client.
  *
- * Creating one fetches and parses YouTube's player script, so it is built once
- * and reused. The PROMISE is cached rather than the result, so two downloads
- * starting at the same moment share a single startup instead of racing.
+ * Creating one fetches and parses YouTube's player script and mints a PO token,
+ * so it is built once and reused. The PROMISE is cached rather than the result,
+ * so two downloads starting at the same moment share a single startup instead of
+ * racing. It is rebuilt once the token is old enough to be worth refreshing.
  */
-async function getClient() {
+// `cookie` / `usePoToken` come from config, so they are the same on every call;
+// the cached client does not need to be keyed by them.
+async function getClient({ cookie, usePoToken }) {
+  if (clientPromise !== null && Date.now() - clientBuiltAt > PO_TOKEN_MAX_AGE_MS) {
+    logger.info("Refreshing the YouTube client so its PO token cannot go stale.");
+    clientPromise = null;
+  }
   if (clientPromise === null) {
-    clientPromise = createClient().catch((error) => {
+    clientBuiltAt = Date.now();
+    clientPromise = createClient({ cookie, usePoToken }).catch((error) => {
       clientPromise = null; // let a later download retry after a transient failure
       throw error;
     });
@@ -172,10 +191,30 @@ async function getClient() {
   return clientPromise;
 }
 
-async function createClient() {
+async function createClient({ cookie, usePoToken }) {
   const { Innertube } = await import("youtubei.js");
   await installPlayerEvaluator();
-  return Innertube.create({ retrieve_player: true });
+
+  const options = cookie ? { cookie } : {};
+  if (!usePoToken) {
+    return Innertube.create({ ...options, retrieve_player: true });
+  }
+
+  // The token is bound to this session's visitor data, so a cheap player-less
+  // session is created first just to learn it.
+  const probe = await Innertube.create({ ...options, retrieve_player: false });
+  const { mintPoToken } = await import("./youtube_po_token.js");
+  const minted = await mintPoToken(probe.session?.context?.client?.visitorData);
+  if (minted === null) {
+    return Innertube.create({ ...options, retrieve_player: true });
+  }
+
+  return Innertube.create({
+    ...options,
+    retrieve_player: true,
+    po_token: minted.poToken,
+    visitor_data: minted.visitorData,
+  });
 }
 
 /**
@@ -252,6 +291,7 @@ export const __testing = {
   CLIENT_PREFERENCE,
   setClient(client) {
     clientPromise = client === null ? null : Promise.resolve(client);
+    clientBuiltAt = Date.now();
     evaluatorInstalled = true;
   },
 };

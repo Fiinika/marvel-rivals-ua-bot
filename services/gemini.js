@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { t } from "./i18n.js";
 import { getLogger } from "./logger.js";
+import { allowsPublicSourceAttribution, stripPublicSourceAttribution } from "./post_footer.js";
 import {
   charLength,
   errorText,
@@ -430,7 +431,11 @@ function ensureRequiredMetadata(draft, draftInput) {
   result = appendExtraLinks(result, draftInput);
 
   const sourceLine = sourceAttributionLine(draftInput);
-  if (sourceLine && !hasSourceAttribution(result)) {
+  if (!sourceLine) {
+    // The source belongs to the moderation card only, so a "Джерело: …" line the
+    // model added anyway is dropped here rather than stored in the draft.
+    result = stripPublicSourceAttribution(result);
+  } else if (!hasSourceAttribution(result)) {
     result = `${result}\n\n${sourceLine}`.trim();
   }
 
@@ -692,9 +697,20 @@ function officialMaxLength(draftInput) {
   return OFFICIAL_NORMAL_MAX_LENGTH;
 }
 
+/**
+ * The attribution line a public post carries, or "" when it carries none.
+ *
+ * The source is admin-only metadata — the moderation card shows it, the post does
+ * not. Two exceptions: the official site keeps its reader call-to-action, and the
+ * wiki rubric keeps its credit because CC BY-SA requires it.
+ */
 function sourceAttributionLine(draftInput) {
   if (isOfficialSource(draftInput)) {
     return OFFICIAL_SOURCE_ATTRIBUTION;
+  }
+
+  if (!allowsPublicSourceAttribution(draftInput.source_type)) {
+    return "";
   }
 
   return t("gemini.source_line", { source_name: draftInput.source_name });

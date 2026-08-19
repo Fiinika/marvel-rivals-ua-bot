@@ -20,6 +20,7 @@ export function formatAdminPreview(submission) {
     `<b>${htmlEscape(t("formatter.labels.author"))}:</b> ${usernameText}`,
     `<b>${htmlEscape(t("formatter.labels.user_id"))}:</b> <code>${submission.user_id}</code>`,
     `<b>${htmlEscape(t("formatter.labels.type"))}:</b> <code>${htmlEscape(String(submission.message_type))}</code>`,
+    ...albumMediaLines(submission),
     `<b>${htmlEscape(t("formatter.labels.file"))}:</b> ${formatFileId(submission.file_id)}`,
     `<b>${htmlEscape(t("formatter.labels.media_url"))}:</b> ${formatInlineValue(submission.media_url)}`,
     `<b>${htmlEscape(t("formatter.labels.source_url"))}:</b> ${formatInlineValue(submission.source_url)}`,
@@ -65,9 +66,35 @@ function formatSourceAdminPreview(submission) {
 function formatSourcePublicDraftBlock(submission) {
   return formatPostHtml(String(submission.draft_text || ""), {
     source_url: String(submission.source_url || ""),
+    source_type: submission.source_type,
     allow_source_link: true,
     include_community_footer: true,
   });
+}
+
+/**
+ * For an album, what the group actually holds — "3 (фото 2, відео 1)".
+ *
+ * The media group is previewed above the card, but the counts say at a glance
+ * whether every item made it through, and of what kind.
+ */
+function albumMediaLines(submission) {
+  const parts = submission.parts ?? [];
+  if (String(submission.message_type || "") !== "album" || parts.length < 2) {
+    return [];
+  }
+
+  const counts = new Map();
+  for (const part of parts) {
+    const type = String(part.media_type || "photo");
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  const breakdown = [...counts].map(([type, count]) => `${type} ${count}`).join(", ");
+
+  return [
+    `<b>${htmlEscape(t("formatter.labels.album_media"))}:</b> ` +
+      `<code>${htmlEscape(`${parts.length} (${breakdown})`)}</code>`,
+  ];
 }
 
 function formatFileId(fileId) {

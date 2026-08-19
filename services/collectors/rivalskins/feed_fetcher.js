@@ -3,8 +3,9 @@
  *
  * rivalskins.com posts full-resolution skin renders a few days before a patch.
  * The feed needs no special User-Agent. Each <item> carries the skin name, the
- * post URL, a pubDate and the body in <content:encoded>; the first non-banner
- * image in that HTML is the skin render.
+ * post URL, a pubDate and the body in <content:encoded>; the non-banner images in
+ * that HTML are the post's renders, and a post with two or more of them is
+ * published as one album.
  */
 
 import { DateTime } from "luxon";
@@ -28,10 +29,14 @@ const IMAGE_HOST_SUFFIX = "rivalskins.com";
 // A recurring season-launch banner that appears in every post — never the unique
 // skin render, so it is skipped when picking the post image.
 const BANNER_RE = /launch-skins/i;
+// Telegram's media-group maximum; a post never has this many renders, but the
+// cap keeps a malformed body from queueing an unbounded album.
+const MAX_IMAGES_PER_POST = 10;
 
 /**
  * @typedef {{post_id: string, web_url: string, title: string, body_text: string,
- *            created_at: string|null, image_url: string|null}} RivalSkinsPost
+ *            created_at: string|null, image_url: string|null,
+ *            additional_image_urls: string[]}} RivalSkinsPost
  */
 
 export class RivalSkinsFeedFetcher {
@@ -92,7 +97,7 @@ export function parseFeed(xmlText) {
     return [];
   }
 
-  const posts = [];
+  const parsed = [];
   const seenIds = new Set();
   for (const item of children(channel, "item")) {
     const post = parseItem(item);
@@ -100,10 +105,38 @@ export function parseFeed(xmlText) {
       continue;
     }
     seenIds.add(post.post_id);
-    posts.push(post);
+    parsed.push(post);
   }
 
-  return posts;
+  return parsed.map((post) => finalizePost(post, recurringImages(parsed)));
+}
+
+/**
+ * The image URLs that appear in more than one post of this fetch.
+ *
+ * Most posts end with the season-roadmap or Twitch-drop promo of the moment,
+ * which is not that post's content: publishing it would put the same banner under
+ * every skin leak. A render belongs to exactly one post, so showing up twice in
+ * one feed is the signal — and it keeps working when the site swaps the banner
+ * for a new one, which a hardcoded filename pattern would not.
+ */
+function recurringImages(posts) {
+  const counts = new Map();
+  for (const post of posts) {
+    for (const url of new Set(post.images)) {
+      counts.set(url, (counts.get(url) ?? 0) + 1);
+    }
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([url]) => url));
+}
+
+function finalizePost({ images: allImages, ...fields }, recurring) {
+  const images = allImages.filter((url) => !recurring.has(url)).slice(0, MAX_IMAGES_PER_POST);
+  return Object.freeze({
+    ...fields,
+    image_url: images[0] ?? null,
+    additional_image_urls: images.slice(1),
+  });
 }
 
 function parseItem(item) {
@@ -116,37 +149,39 @@ function parseItem(item) {
 
   const title = findText(item, "title").trim();
   const createdAt = normalizePubDate(findText(item, "pubDate"));
-  const [bodyText, imageUrl] = parseContent(findText(item, "encoded"));
+  const [bodyText, images] = parseContent(findText(item, "encoded"));
 
-  return Object.freeze({
+  return {
     post_id: postId,
     web_url: link,
     title,
     body_text: bodyText,
     created_at: createdAt,
-    image_url: imageUrl,
-  });
+    images,
+  };
 }
 
-/** Return [clean body text, the skin-render image URL] from a post's HTML. */
+/** Return [clean body text, the post's on-site render URLs] from a post's HTML. */
 export function parseContent(contentHtml) {
   if (!contentHtml || !contentHtml.trim()) {
-    return ["", null];
+    return ["", []];
   }
 
   const $ = loadHtml(contentHtml);
   const bodyText = getText($.root());
 
-  let imageUrl = null;
+  const images = [];
+  const seen = new Set();
   for (const image of $("img[src]").toArray()) {
     const src = String($(image).attr("src")).trim();
-    if (isAllowedImage(src) && !BANNER_RE.test(src)) {
-      imageUrl = src;
-      break;
+    if (!isAllowedImage(src) || BANNER_RE.test(src) || seen.has(src)) {
+      continue;
     }
+    seen.add(src);
+    images.push(src);
   }
 
-  return [bodyText, imageUrl];
+  return [bodyText, images];
 }
 
 function isAllowedImage(url) {
