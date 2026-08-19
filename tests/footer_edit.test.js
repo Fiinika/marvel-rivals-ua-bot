@@ -23,7 +23,7 @@ import {
 const FOOTER = formatCommunityFooter();
 const render = (text) =>
   formatPostHtml(text, { source_url: "", allow_source_link: false, include_community_footer: true });
-const countFooters = (text) => (text.match(/Навігація по ком’юніті/g) || []).length;
+const countFooters = (text) => (text.match(/Запропонувати новину/g) || []).length;
 
 it("renders exactly one footer", () => {
   expect(countFooters(render("Патч 5.5 вже доступний."))).toBe(1);

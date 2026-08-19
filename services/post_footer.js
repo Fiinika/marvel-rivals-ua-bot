@@ -2,8 +2,6 @@ import { t, tOptional } from "./i18n.js";
 import { htmlEscape, rstrip } from "./pyutils.js";
 import { isSafeHttpUrl } from "./urlutils.js";
 
-export const FOOTER_TITLE_KEY = "post_footer.title";
-export const FOOTER_SEPARATOR_KEY = "post_footer.separator";
 export const OFFICIAL_SOURCE_ATTRIBUTION = "Повні деталі — на офіційному сайті.";
 const OFFICIAL_SOURCE_PREFIX = "Повні деталі — на ";
 const OFFICIAL_SOURCE_LABEL = "офіційному сайті";
@@ -28,24 +26,20 @@ export const FOOTER_LINK_KEYS = [
 ];
 
 // A private-use marker (U+E000) placed in front of the appended community footer
-// so its position is found STRUCTURALLY, never by matching the visible title
-// text. An untrusted post body could otherwise contain that title to suppress or
+// so its position is found STRUCTURALLY, never by matching the visible footer
+// text. An untrusted post body could otherwise contain that text to suppress or
 // hijack the footer. The sentinel is stripped from incoming text and from the
 // final output, so it never reaches Telegram.
 const FOOTER_SENTINEL = "";
 
+/**
+ * The footer is the links line and nothing else — no rule above it, no heading.
+ * Both were dropped deliberately: under a short post they took up more room than
+ * the post itself and made every message read like a signature block.
+ */
 export function formatCommunityFooter() {
-  const separator = t(FOOTER_SEPARATOR_KEY);
-  const title = t(FOOTER_TITLE_KEY);
   const links = FOOTER_LINK_KEYS.map((keyPrefix) => formatPlainLink(keyPrefix));
-  const linksLine = links.filter(Boolean).join(t("post_footer.link_separator"));
-
-  const parts = [separator, title];
-  if (linksLine) {
-    parts.push(linksLine);
-  }
-
-  return parts.filter(Boolean).join("\n").trim();
+  return links.filter(Boolean).join(t("post_footer.link_separator")).trim();
 }
 
 /**

@@ -477,10 +477,10 @@ The community navigation footer is always added to every published post — offi
 ```text
 #MarvelRivalsUA #Офіційно #Анонс
 
-────────────────
-Навігація по ком’юніті 👇
 💬 Чат | 🤖 Запропонувати новину | 🎧 Discord
 ```
+
+It is one line of links and nothing more. A horizontal rule and a "Навігація по ком'юніті" heading used to sit above it; under a short post they took up more room than the post itself, so both were dropped.
 
 Footer labels and URLs both live in `locales/uk.json` under `post_footer.links` (`chat`, `submission`, `discord`), each with a `label` and a `url`. If a `url` is set, that item is rendered as a safe Telegram HTML link; if a `url` is empty or invalid, the item stays plain text. The bot validates that footer URLs use `http` or `https` before rendering links. The footer is not part of a draft's stored text: it is appended fresh on every render. The editable copy of a part therefore shows the bare body without it, and any trailing footer is stripped again on save, so editing a part can never duplicate it. Change the labels and URLs in `locales/uk.json` rather than in a draft.
 

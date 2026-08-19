@@ -262,8 +262,6 @@
     }
   },
   "post_footer": {
-    "separator": "────────────────",
-    "title": "Навігація по ком’юніті 👇",
     "link_separator": " | ",
     "links": {
       "chat": {

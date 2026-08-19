@@ -1,16 +1,20 @@
 /**
  * Tests for the community-footer rendering, especially that the footer is located
  * by a structural sentinel — so an untrusted post body containing the visible
- * footer title can no longer suppress, hijack or forge the footer.
+ * footer text can no longer suppress, hijack or forge the footer.
  */
 
 import { expect, it } from "vitest";
 
-import { t } from "../services/i18n.js";
-import { formatCommunityFooterHtml, formatPostHtml } from "../services/post_footer.js";
+import { formatCommunityFooter, formatCommunityFooterHtml, formatPostHtml } from "../services/post_footer.js";
 
 const CHAT_LINK = '<a href="https://t.me/UAMarvelRivalsChat">Чат</a>';
-const FOOTER_TITLE = t("post_footer.title");
+const SUBMISSION_LINK = '<a href="https://t.me/MarvelRivalsUABot">Запропонувати новину</a>';
+const DISCORD_LINK = '<a href="https://discord.gg/U8HvUB7NFt">Discord</a>';
+// The footer is one line of links now — no rule above it, no heading — so every
+// label ends up inside an anchor and none of it survives as plain text. That is
+// what an attacker would have to reproduce to forge it.
+const FOOTER_TEXT = formatCommunityFooter();
 // The private-use marker post_footer places before the appended footer. It is
 // intentionally not exported: these tests assert it never reaches the output.
 const FOOTER_SENTINEL = "";
@@ -19,24 +23,36 @@ function countOccurrences(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
-it("appends and linkifies the footer", () => {
+it("appends the footer as one line of links", () => {
   const html = formatPostHtml("Свіжа новина.", { include_community_footer: true });
-  expect(html).toContain(FOOTER_TITLE);
-  expect(html).toContain(CHAT_LINK); // footer links are turned into anchors
+
+  expect(html).toContain(CHAT_LINK);
+  expect(html).toContain(SUBMISSION_LINK);
+  expect(html).toContain(DISCORD_LINK);
   expect(html).not.toContain(FOOTER_SENTINEL); // the marker never reaches output
 });
 
-it("does not let a body containing the footer title suppress the footer", () => {
-  // The attack: a feed body that embeds the visible footer title used to make the
-  // old title-substring check think the footer was already present and skip it.
-  const malicious = `Дивіться: ${FOOTER_TITLE} (підробка) і ще текст.`;
+it("carries no rule and no heading above the links", () => {
+  const html = formatPostHtml("Свіжа новина.", { include_community_footer: true });
+
+  expect(FOOTER_TEXT).toBe("💬 Чат | 🤖 Запропонувати новину | 🎧 Discord");
+  expect(html).not.toContain("─");
+  expect(html).not.toContain("Навігація");
+  // Body, one blank line, links — nothing between them.
+  expect(html.startsWith("Свіжа новина.\n\n💬 ")).toBe(true);
+});
+
+it("does not let a body containing the footer text suppress the footer", () => {
+  // The attack: a feed body that embeds the visible footer text used to make the
+  // old substring check think the footer was already present and skip it.
+  const malicious = `Дивіться: ${FOOTER_TEXT} (підробка) і ще текст.`;
   const html = formatPostHtml(malicious, { include_community_footer: true });
 
   // The real footer is still appended with working links...
   expect(html).toContain(CHAT_LINK);
-  // ...and the title phrase now appears at least twice: the attacker's escaped copy
-  // plus the genuine appended footer (i.e. it was NOT suppressed).
-  expect(countOccurrences(html, FOOTER_TITLE)).toBeGreaterThanOrEqual(2);
+  // ...and the label now appears at least twice: the attacker's escaped copy plus
+  // the genuine appended footer (i.e. it was NOT suppressed).
+  expect(countOccurrences(html, "Запропонувати новину")).toBeGreaterThanOrEqual(2);
   expect(html).not.toContain(FOOTER_SENTINEL);
 });
 
@@ -48,14 +64,18 @@ it("strips a sentinel injected into the body", () => {
 
 it("adds no footer when it was not requested", () => {
   const html = formatPostHtml("Просто текст.", { include_community_footer: false });
-  expect(html).not.toContain(FOOTER_TITLE);
+
+  expect(html).not.toContain(CHAT_LINK);
+  expect(html).not.toContain("Запропонувати новину");
   expect(html).not.toContain(FOOTER_SENTINEL);
 });
 
 it("linkifies the standalone footer helper without leaking the sentinel", () => {
   // The album digest caption builds its own HTML via this helper.
   const html = formatCommunityFooterHtml();
+
   expect(html).toContain(CHAT_LINK);
-  expect(html).toContain(FOOTER_TITLE);
+  expect(html).toContain(SUBMISSION_LINK);
+  expect(html).toContain(DISCORD_LINK);
   expect(html).not.toContain(FOOTER_SENTINEL);
 });

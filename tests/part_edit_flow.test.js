@@ -26,7 +26,7 @@ const FOOTER = formatCommunityFooter();
 const ADMIN_CHAT = -4242;
 const ADMIN_ID = 7;
 
-const countFooters = (text) => (String(text).match(/Навігація по ком’юніті/g) || []).length;
+const countFooters = (text) => (String(text).match(/Запропонувати новину/g) || []).length;
 
 function fakeDb(partText) {
   const part = {
