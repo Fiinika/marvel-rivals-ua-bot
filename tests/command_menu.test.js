@@ -46,6 +46,7 @@ it("scopes the admin commands to the admin chat", async () => {
     "redraft",
     "fanartdigest",
     "wikifact",
+    "stats",
     "cleanup",
     "cancel",
   ]);
@@ -55,6 +56,7 @@ it("scopes the admin commands to the admin chat", async () => {
     t("commands.redraft"),
     t("commands.fanartdigest"),
     t("commands.wikifact"),
+    t("commands.stats"),
     t("commands.cleanup"),
     t("commands.cancel"),
   ]);

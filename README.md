@@ -28,7 +28,7 @@ Every source except the official site is opt-in and off by default.
 - the moderation chat shows the publishable post parts first, then a separate metadata/control message with `✅ Approve` / `✏️ Edit` / `❌ Reject`
 - only user IDs listed in `ADMIN_USER_IDS` may act on the buttons
 - admins can edit any part, add new parts, and cancel an active edit with `/cancel`
-- `/fetch_news`, `/fanartdigest`, and `/wikifact` trigger a source or rubric on demand; `/redraft` re-drafts a source's newest item for testing
+- `/fetch_news`, `/fanartdigest`, and `/wikifact` trigger a source or rubric on demand; `/redraft` re-drafts a source's newest item for testing; `/stats` reports what every source has been doing
 
 **Avoids duplicates twice over:** every source tracks what it has already seen, and an optional Gemini check drops an item that retells a story another source already delivered.
 
@@ -88,6 +88,7 @@ services/
   moderation.js              sending a submission into the moderation chat
   post_footer.js             community footer and source attribution
   publisher.js               publishing: text, photo, album, native video
+  reports.js                 weekly activity report and /stats
   pyutils.js                 Python-semantics shims (strip, format, ISO timestamps, code-point slicing)
   source_links.js            allowlisted links kept from the original post text
   telegram_errors.js         grammY error classification
@@ -453,6 +454,16 @@ The draft prompt is chosen by source: `prompts/gemini_news_uk.md` for official a
 
 ### The weekly rubrics
 
+### Knowing what the sources actually do
+
+Until a source is measured, keeping it is a guess. The bot posts an **activity report** to the admin chat once a week (`ENABLE_WEEKLY_REPORT`, on by default, `WEEKLY_REPORT_WEEKDAY`/`WEEKLY_REPORT_HOUR` in `ARTICLE_TIMEZONE`), and the same report is available on demand as `/stats` — `/stats` covers the last 7 days, `/stats 30` the last 30, up to 90.
+
+Per source it answers four questions: how many items it **found**, how many of those were dropped as **cross-source duplicates**, how many were **published**, and how many were **rejected**. A source that brought nothing is listed as such rather than omitted — silence is the finding, and it is how a quietly broken feed shows up. A switched-off source says so. Readers' own submissions are counted separately, without the "found" and "duplicate" columns that would always read zero for them.
+
+The report closes with the queue as it stands right now, ignoring the window: how many drafts are pending and how long the oldest has waited. A draft forgotten for three weeks is exactly what a weekly summary should put in front of you.
+
+The duplicate count is possible because `seen_sources` records **why** an item was marked seen — `queued` or `duplicate`. Rows written before that column existed are counted as found, never silently dropped.
+
 The **fan-art digest** pulls the top `FANART_FLAIR` posts of the past week from `FANART_SUBREDDIT` and queues one Telegram album of up to `FANART_DIGEST_COUNT` images. The caption credits each artist by their Reddit nick, hyperlinked to their post — post titles are never shown. Only direct `i.redd.it` still images are included: a media group is atomic, so one image Telegram cannot fetch would fail the whole album. At most three works by the same artist are used, so one prolific week does not turn the round-up into a solo show; further works by that artist are held back and only used if the album would otherwise come out short. A week that yields no usable image is not marked done, so a later run can still post it.
 
 The **"Чи знали ви?" rubric** reads the cleaned bullet points of the Trivia sections across `Category:Heroes`, `Maps`, `Locations`, `NPCs`, `Cast`, `Events` and `Game Modes` on the Marvel Rivals Fandom wiki, and shuffles the combined page list. Heroes alone made the rubric lopsided — a hero page's Trivia is mostly comic-book biography — so the game-side categories are what supply facts about the game itself: map easter eggs, voice actors, event details. A category that fails to load is skipped rather than failing the run. It samples several heroes per run, drops the bullets that cannot stand on their own as a post (a nested sub-item, a `…:` list header, an opener like "This song…" whose subject is in the bullet above), and ranks the rest — cast, easter eggs, in-game flavour and lore first, the formulaic "first appeared in … (1975) #1" debut line last. Gemini picks the best of the resulting shortlist, then translates it to Ukrainian and credits `Marvel Rivals Wiki (CC BY-SA)` with a link to the hero page. A hero with fewer facts already published is preferred, so the rubric spreads across the roster instead of mining one page. The roster walk continues past a fully-seen hero, so the rubric cannot silently starve. Facts are deduplicated by a hash of the fact text, so re-worded whitespace or casing does not re-post one.
@@ -788,7 +799,7 @@ explicitly at startup rather than relying on whatever BotFather was once given:
 - **Private chats** show only `/start`.
 - **The default and all-group scopes are cleared**, so an unmoderated group inherits
   no menu at all.
-- **The admin chat** shows `/fetch_news`, `/redraft`, `/fanartdigest`, `/wikifact`, `/cleanup`, and `/cancel`.
+- **The admin chat** shows `/fetch_news`, `/redraft`, `/fanartdigest`, `/wikifact`, `/stats`, `/cleanup`, and `/cancel`.
   This is skipped when the admin chat is itself a moderated chat, so admin commands
   are never advertised to ordinary members.
 - **Each moderated chat** shows `/report` and `/rules` to members, while its

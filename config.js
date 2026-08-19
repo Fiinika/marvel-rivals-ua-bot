@@ -54,6 +54,10 @@ export const DEFAULT_FANART_SUBREDDIT = "MarvelRivals";
 export const DEFAULT_FANART_FLAIR = "Fan Art";
 // Friday (Mon=0 .. Sun=6) at 18:00 local time (ARTICLE_TIMEZONE).
 export const DEFAULT_FANART_DIGEST_WEEKDAY = 4;
+// Monday morning: the report covers the week that just ended, and lands before
+// anyone decides what to do with the week ahead.
+export const DEFAULT_WEEKLY_REPORT_WEEKDAY = 0;
+export const DEFAULT_WEEKLY_REPORT_HOUR = 11;
 export const DEFAULT_FANART_DIGEST_HOUR = 18;
 // Telegram media groups allow at most 10 items.
 export const DEFAULT_FANART_DIGEST_COUNT = 10;
@@ -162,6 +166,12 @@ export function loadConfig(env = process.env) {
   const fanartFlair = (env.FANART_FLAIR ?? DEFAULT_FANART_FLAIR).trim() || DEFAULT_FANART_FLAIR;
   const fanartDigestWeekday = optionalWeekday(env, "FANART_DIGEST_WEEKDAY", DEFAULT_FANART_DIGEST_WEEKDAY);
   const fanartDigestHour = optionalHour(env, "FANART_DIGEST_HOUR", DEFAULT_FANART_DIGEST_HOUR);
+  // The weekly activity report goes to the admin chat only, costs one message a
+  // week and no network calls beyond it, so it is on unless switched off.
+  const enableWeeklyReport = optionalBool(env, "ENABLE_WEEKLY_REPORT", true);
+  const weeklyReportWeekday = optionalWeekday(env, "WEEKLY_REPORT_WEEKDAY", DEFAULT_WEEKLY_REPORT_WEEKDAY);
+  const weeklyReportHour = optionalHour(env, "WEEKLY_REPORT_HOUR", DEFAULT_WEEKLY_REPORT_HOUR);
+
   // Clamp the count to Telegram's media-group max of 10; 0/invalid keeps the default.
   const fanartDigestCount = Math.min(
     optionalLenientNonNegativeInt(env, "FANART_DIGEST_COUNT", DEFAULT_FANART_DIGEST_COUNT) ||
@@ -226,6 +236,9 @@ export function loadConfig(env = process.env) {
     enable_fanart_digest: enableFanartDigest,
     fanart_subreddit: fanartSubreddit,
     fanart_flair: fanartFlair,
+    enable_weekly_report: enableWeeklyReport,
+    weekly_report_weekday: weeklyReportWeekday,
+    weekly_report_hour: weeklyReportHour,
     fanart_digest_weekday: fanartDigestWeekday,
     fanart_digest_hour: fanartDigestHour,
     fanart_digest_count: fanartDigestCount,

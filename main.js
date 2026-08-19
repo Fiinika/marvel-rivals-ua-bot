@@ -13,6 +13,7 @@ import { runAllCollectors } from "./services/collectors/registry.js";
 import { startWikiFactsScheduler } from "./services/collectors/wiki_facts/collector.js";
 import { startDbBackupScheduler } from "./services/db_backup.js";
 import { startFanartDigestScheduler } from "./services/digests/fanart.js";
+import { startWeeklyReportScheduler } from "./services/reports.js";
 import { t } from "./services/i18n.js";
 import { getLogger, setLogLevel } from "./services/logger.js";
 import { sleep, sortedNumbers } from "./services/pyutils.js";
@@ -61,6 +62,7 @@ export async function run() {
   const backupTask = startDbBackupScheduler(config);
   const fanartDigestTask = startFanartDigestScheduler(bot, config, database);
   const wikiFactsTask = startWikiFactsScheduler(bot, config, database);
+  const weeklyReportTask = startWeeklyReportScheduler(bot, config, database);
 
   const stop = () => {
     bot.stop().catch((error) => logger.exception("Failed to stop the bot cleanly", error));
@@ -73,7 +75,14 @@ export async function run() {
       allowed_updates: ["message", "edited_message", "channel_post", "callback_query"],
     });
   } finally {
-    await cancelTasks([newsSchedulerTask, discordTask, backupTask, fanartDigestTask, wikiFactsTask]);
+    await cancelTasks([
+      newsSchedulerTask,
+      discordTask,
+      backupTask,
+      fanartDigestTask,
+      wikiFactsTask,
+      weeklyReportTask,
+    ]);
     cancelScheduledDeletes();
   }
 }
@@ -198,7 +207,7 @@ export async function applyAdminChatCommands(bot, config) {
     return;
   }
 
-  const adminCommands = ["fetch_news", "redraft", "fanartdigest", "wikifact", "cleanup", "cancel"].map((name) => ({
+  const adminCommands = ["fetch_news", "redraft", "fanartdigest", "wikifact", "stats", "cleanup", "cancel"].map((name) => ({
     command: name,
     description: t(`commands.${name}`),
   }));

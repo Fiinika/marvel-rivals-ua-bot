@@ -136,6 +136,10 @@ export class Database {
         )
       `);
       ensureColumn(db, "seen_sources", "article_date", "TEXT");
+      // Why an item was recorded as seen: "queued" (a draft reached moderation)
+      // or "duplicate" (another source had already told the same story). Rows
+      // written before this column existed stay NULL and are reported as unknown.
+      ensureColumn(db, "seen_sources", "outcome", "TEXT");
       db.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_seen_sources_source
         ON seen_sources (source_type, source_id)
@@ -549,7 +553,7 @@ export class Database {
     });
   }
 
-  async markSourceSeen({ source_type, source_id, source_url, title, article_date }) {
+  async markSourceSeen({ source_type, source_id, source_url, title, article_date, outcome = null }) {
     await this.#execute(
       `
       INSERT OR IGNORE INTO seen_sources (
@@ -558,12 +562,65 @@ export class Database {
           source_url,
           title,
           article_date,
+          outcome,
           first_seen_at
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
-      [source_type, source_id, source_url, title ?? null, article_date ?? null, utcNowIso()],
+      [source_type, source_id, source_url, title ?? null, article_date ?? null, outcome, utcNowIso()],
     );
+  }
+
+  /**
+   * What every source did since `since`, for the weekly report and /stats.
+   *
+   * Two tables answer different halves of the question. `seen_sources` knows what
+   * was FOUND, including the items dropped as cross-source duplicates, which
+   * never become submissions. `submissions` knows what happened after: queued,
+   * published, rejected. The pending backlog is deliberately not time-bounded —
+   * a draft waiting three weeks is exactly what the report should surface.
+   */
+  async collectActivity({ since }) {
+    return this.#connect((db) => {
+      const seen = db
+        .prepare(
+          `
+          SELECT source_type, COALESCE(outcome, 'unknown') AS outcome, COUNT(*) AS total
+          FROM seen_sources
+          WHERE first_seen_at >= ?
+          GROUP BY source_type, outcome
+          `,
+        )
+        .all(since);
+      const submissions = db
+        .prepare(
+          `
+          SELECT COALESCE(source_type, '') AS source_type, status, COUNT(*) AS total
+          FROM submissions
+          WHERE created_at >= ?
+          GROUP BY COALESCE(source_type, ''), status
+          `,
+        )
+        .all(since);
+      const backlog = db
+        .prepare(`SELECT COUNT(*) AS total, MIN(created_at) AS oldest FROM submissions WHERE status = ?`)
+        .get(STATUS_PENDING);
+
+      return {
+        seen: seen.map((row) => ({
+          source_type: String(row.source_type),
+          outcome: String(row.outcome),
+          total: Number(row.total),
+        })),
+        submissions: submissions.map((row) => ({
+          source_type: String(row.source_type),
+          status: String(row.status),
+          total: Number(row.total),
+        })),
+        pending_total: Number(backlog?.total ?? 0),
+        pending_oldest: backlog?.oldest ? String(backlog.oldest) : null,
+      };
+    });
   }
 
   async getLatestSeenArticleDate(sourceType) {

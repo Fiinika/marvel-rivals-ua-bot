@@ -22,6 +22,7 @@ import {
 import { runWikiFactsOnce } from "../services/collectors/wiki_facts/collector.js";
 import { runFanartDigestOnce } from "../services/digests/fanart.js";
 import { formatAdminPreview } from "../services/formatter.js";
+import { buildActivityReport } from "../services/reports.js";
 import { t } from "../services/i18n.js";
 import { getLogger } from "../services/logger.js";
 import {
@@ -435,6 +436,40 @@ ${t("admin.redraft.notice")}`
     }
   });
 
+  /**
+   * The same report the weekly message sends, on demand and over any window:
+   * `/stats` covers the last 7 days, `/stats 30` the last 30.
+   */
+  composer.command("stats", async (ctx, next) => {
+    if (!adminOrPrivateChat(ctx)) return next();
+    if (!isAdminUser(ctx.from?.id)) {
+      await ctx.reply(t("admin.stats.no_permission"));
+      return;
+    }
+    if (ctx.chat.id !== config.admin_chat_id && chatType(ctx) !== "private") {
+      await ctx.reply(t("admin.stats.wrong_chat"));
+      return;
+    }
+
+    const days = parseStatsDays(ctx.match);
+    if (days === null) {
+      await ctx.reply(t("admin.stats.bad_argument", { value: String(ctx.match).trim() }));
+      return;
+    }
+
+    let report;
+    try {
+      report = await buildActivityReport(db, config, { days });
+    } catch (error) {
+      logger.exception("Building the activity report failed", error);
+      await ctx.reply(t("admin.stats.failed"));
+      return;
+    }
+
+    await ctx.reply(report, { parse_mode: "HTML", link_preview_options: DISABLED_LINK_PREVIEW });
+    logger.info(`Admin ${ctx.from.id} requested the ${days}-day activity report`);
+  });
+
   composer.command("cancel", async (ctx, next) => {
     if (!adminCommandChat(ctx)) return next();
     const state = await db.getAdminEditState(ctx.from.id);
@@ -644,7 +679,24 @@ const CLEANUP_DEFAULT_DAYS = 30;
  * means the whole queue, so it drops the age window to 0 unless a number was
  * given too.
  */
-export function parseCleanupArgs(args) {
+export /**
+ * `/stats` or `/stats <days>`. Returns null for anything that is not a whole
+ * number of days between 1 and 90 — beyond that the message stops being a
+ * report and starts being a wall.
+ */
+function parseStatsDays(match) {
+  const raw = String(match ?? "").trim();
+  if (!raw) {
+    return 7;
+  }
+  if (!isDigits(raw)) {
+    return null;
+  }
+  const days = Number(raw);
+  return days >= 1 && days <= 90 ? days : null;
+}
+
+function parseCleanupArgs(args) {
   let days = null;
   let confirmed = false;
   let includePending = false;

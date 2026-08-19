@@ -195,6 +195,9 @@ jobs:
           FANART_FLAIR: ${{ secrets.FANART_FLAIR }}
           FANART_DIGEST_WEEKDAY: ${{ secrets.FANART_DIGEST_WEEKDAY }}
           FANART_DIGEST_HOUR: ${{ secrets.FANART_DIGEST_HOUR }}
+          ENABLE_WEEKLY_REPORT: ${{ secrets.ENABLE_WEEKLY_REPORT }}
+          WEEKLY_REPORT_WEEKDAY: ${{ secrets.WEEKLY_REPORT_WEEKDAY }}
+          WEEKLY_REPORT_HOUR: ${{ secrets.WEEKLY_REPORT_HOUR }}
           FANART_DIGEST_COUNT: ${{ secrets.FANART_DIGEST_COUNT }}
         run: |
           set -euo pipefail
@@ -287,6 +290,9 @@ jobs:
             printf 'export FANART_FLAIR=%q\n'                     "$FANART_FLAIR";
             printf 'export FANART_DIGEST_WEEKDAY=%q\n'            "$FANART_DIGEST_WEEKDAY";
             printf 'export FANART_DIGEST_HOUR=%q\n'               "$FANART_DIGEST_HOUR";
+            printf 'export ENABLE_WEEKLY_REPORT=%q\n'             "$ENABLE_WEEKLY_REPORT";
+            printf 'export WEEKLY_REPORT_WEEKDAY=%q\n'            "$WEEKLY_REPORT_WEEKDAY";
+            printf 'export WEEKLY_REPORT_HOUR=%q\n'               "$WEEKLY_REPORT_HOUR";
             printf 'export FANART_DIGEST_COUNT=%q\n'              "$FANART_DIGEST_COUNT";
             cat scripts/deploy-remote.sh; } \
             | ssh "${ssh_opts[@]}" "$target" bash -s

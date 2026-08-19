@@ -208,6 +208,7 @@ export class BaseNewsCollector {
         source_url: candidate.source_url,
         title: candidate.title,
         article_date: candidate.article_date,
+        outcome: "duplicate",
       });
       return null;
     }
@@ -366,6 +367,7 @@ export class BaseNewsCollector {
       source_url: sourceUrl,
       title: candidate.title,
       article_date: candidate.article_date,
+      outcome: "queued",
     });
     logger.info(`Created moderation draft for ${this.definition.collector_id} article ${sourceUrl}`);
     return true;
