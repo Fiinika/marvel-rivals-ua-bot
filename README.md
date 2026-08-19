@@ -244,7 +244,7 @@ SUBMISSION_COOLDOWN_SECONDS=120
 MIN_SUBMISSION_TEXT_WORDS=3
 MIN_SUBMISSION_TEXT_CHARS=10
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-3.7-flash
 OFFICIAL_NEWS_URL=https://www.marvelrivals.com/news/
 NEWS_CHECK_INTERVAL_MINUTES=5
 ARTICLE_TIMEZONE=Europe/Kyiv
@@ -254,7 +254,7 @@ ARTICLE_TIMEZONE=Europe/Kyiv
 - `SUBMISSION_COOLDOWN_SECONDS` — per-user minimum gap between submissions, default `120`. `0` disables it, and `ADMIN_USER_IDS` always bypass it.
 - `MIN_SUBMISSION_TEXT_WORDS` / `MIN_SUBMISSION_TEXT_CHARS` — a plain-text submission shorter than either limit is bounced with a hint instead of reaching the queue. Defaults `3` and `10`; `0` disables that half of the check. Links, media, and admins are exempt.
 - `GEMINI_API_KEY` — enables every AI feature: drafts for all sources, the cross-source duplicate check, and the wiki-facts rubric. Create a key at `https://aistudio.google.com/app/apikey`. Without it the bot still starts and manual submissions still work, but the periodic collector scheduler never starts, a manual `/fetch_news` run stops before drafting with a Ukrainian warning, and the wiki-facts rubric refuses to run.
-- `GEMINI_MODEL` — default `gemini-3.6-flash`, chosen by running the same real articles, social posts, and wiki trivia through several models: it wrote the most natural Ukrainian, fit more of a patch note into the same character budget, and was the fastest. The model in use is named in the startup log, since a deployment can override it.
+- `GEMINI_MODEL` — default `gemini-3.7-flash`, chosen by running the same real article through several models: 2.5-flash ran into the length cap and was cut mid-sentence, losing a fix entirely, while 3.7 fit the whole patch note into fewer characters with cleaner structure. The model in use is named in the startup log, since a deployment can override it — and note that `.env.prod` keeps whatever the deploy last gave it, so a model pinned there wins over this default until the secret is changed.
 - `OFFICIAL_NEWS_URL` — the official news list page, default `https://www.marvelrivals.com/news/`.
 - `NEWS_CHECK_INTERVAL_MINUTES` — the periodic collector tick, default `5`. Empty, non-numeric, `0`, or negative disables scheduled checks. It also requires `GEMINI_API_KEY`. A tick over every source costs about two seconds when nothing is new, so this setting is about how stale a post may be rather than about load — at 30 minutes a big announcement could sit undetected for half an hour.
 - `ARTICLE_TIMEZONE` — default `Europe/Kyiv`. It converts article dates **and** is the local timezone every schedule below is evaluated in: the backup hour, the wiki-facts run, and the fan-art digest.

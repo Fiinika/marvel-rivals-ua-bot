@@ -13,7 +13,7 @@ export class ConfigError extends Error {
 // posts and wiki trivia: 3.6 produced the most natural Ukrainian (2.5 translated the
 // game's name, rendering "Rivals" as "суперники"), fit noticeably more of a patch
 // note into the same character budget, and was the fastest of the three.
-export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.7-flash";
 // How often every source is polled. A full tick over all sources costs about two
 // seconds when nothing is new, so the interval is set by how stale a post may be,
 // not by cost: at 30 minutes a big announcement reached the queue up to half an
